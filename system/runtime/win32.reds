@@ -174,7 +174,7 @@ win32-startup-ctx: context [
 	;-------------------------------------------
 	;-- Retrieve command-line information from stack
 	;-------------------------------------------
-	on-start: func [/local c argv s args][
+	on-start: func [/local c argv s][
 		c: 1											;-- account for executable name
 		argv: as pointer! [integer!] allocate 256 * 4	;-- max argc = 256
 
@@ -233,9 +233,11 @@ win32-startup-ctx: context [
 	][
 		switch fdwReason [
 			DLL_PROCESS_ATTACH [
-				***-main
-				win32-startup-ctx/init				;-- init Windows-specific handlers
-				on-load hinstDLL
+				#if red-pass? = no [				;-- only for pure R/S DLLs
+					***-boot-rs
+					on-load hinstDLL
+					***-main
+				]
 			]
 			DLL_THREAD_ATTACH  [on-new-thread  hinstDLL]
 			DLL_THREAD_DETACH  [on-exit-thread hinstDLL]

@@ -19,6 +19,7 @@ float: context [
 		FORM_FLOAT_32
 		FORM_FLOAT_64
 		FORM_PERCENT
+		FORM_TIME
 	]
 
 	pretty-print?: true
@@ -75,21 +76,6 @@ float: context [
 		fl
 	]
 
-	to-integer: func [
-		number 	[float!]
-		return:	[integer!]
-		/local
-			f	[float!]
-			d	[int-ptr!]
-	][
-		;-- Based on this method: http://stackoverflow.com/a/429812/494472
-		;-- A bit more explanation: http://lolengine.net/blog/2011/3/20/understanding-fast-float-integer-conversions
-		number: either number < 0.0 [ceil number][floor number]
-		f: number + 6755399441055744.0
-		d: as int-ptr! :f
-		d/value
-	]
-
 	form-float: func [
 		f			[float!]
 		type		[integer!]
@@ -125,14 +111,22 @@ float: context [
 		]
 
 		s: "0000000000000000000000000000000"					;-- 32 bytes wide, big enough.
-		either type = FORM_FLOAT_32 [
-			s/8: #"0"
-			s/9: #"0"
-			sprintf [s "%.7g" f]
-		][
-			s/17: #"0"
-			s/18: #"0"
-			sprintf [s "%.16g" f]
+		case [
+			type = FORM_FLOAT_32 [
+				s/8: #"0"
+				s/9: #"0"
+				sprintf [s "%.7g" f]
+			]
+			type = FORM_TIME [									;-- nanosecond precision
+				s/10: #"0"
+				s/11: #"0"
+				sprintf [s "%.9g" f]
+			]
+			true [
+				s/17: #"0"
+				s/18: #"0"
+				sprintf [s "%.16g" f]
+			]
 		]
 
 		p:  null
@@ -180,11 +174,12 @@ float: context [
 						all [p0/2 = #"1" p0/1 = #"0"]
 						all [p0/2 = #"9" p0/1 = #"9"]
 					][
-						either type = FORM_FLOAT_32 [
-							sprintf [s0 "%.5g" f]
-						][
-							sprintf [s0 "%.14g" f]
+						s: case [
+							type = FORM_FLOAT_32 ["%.5g"]
+							type = FORM_TIME	 ["%.7g"]
+							true				 ["%.14g"]
 						]
+						sprintf [s0 s f]
 						s: s0
 					]
 				]
@@ -205,7 +200,7 @@ float: context [
 			s/1: #"%"
 			s/2: #"^@"
 		][
-			unless dot? [										;-- added tailing ".0"
+			if all [not dot? type <> FORM_TIME][				;-- added tailing ".0"
 				either p = null [
 					p: s
 				][
@@ -230,7 +225,7 @@ float: context [
 			OP_SUB [left - right]
 			OP_MUL [left * right]
 			OP_DIV [
-				either 0.0 = right [
+				either all [0.0 = right not NaN? right][
 					fire [TO_ERROR(math zero-divide)]
 					0.0						;-- pass the compiler's type-checking
 				][
@@ -238,7 +233,7 @@ float: context [
 				]
 			]
 			OP_REM [
-				either 0.0 = right [
+				either all [0.0 = right not NaN? right][
 					fire [TO_ERROR(math zero-divide)]
 					0.0						;-- pass the compiler's type-checking
 				][
@@ -261,6 +256,11 @@ float: context [
 			type1 [integer!]
 			type2 [integer!]
 			int   [red-integer!]
+			op1	  [float!]
+			op2	  [float!]
+			t1?	  [logic!]
+			t2?	  [logic!]
+			pct?  [logic!]
 	][
 		#if debug? = yes [if verbose > 0 [print-line "float/do-math"]]
 
@@ -274,6 +274,7 @@ float: context [
 			type1 = TYPE_INTEGER
 			type1 = TYPE_FLOAT
 			type1 = TYPE_PERCENT
+			type1 = TYPE_TIME
 		]
 
 		if type2 = TYPE_TUPLE [
@@ -285,29 +286,43 @@ float: context [
 			type2 = TYPE_CHAR
 			type2 = TYPE_FLOAT
 			type2 = TYPE_PERCENT
+			type2 = TYPE_TIME
 		][fire [TO_ERROR(script invalid-type) datatype/push type2]]
 
 		if type1 = TYPE_INTEGER [
 			int: as red-integer! left
 			left/header: TYPE_FLOAT
-			left/value: integer/to-float int/value
+			left/value: as-float int/value
 		]
 		if any [
 			type2 = TYPE_INTEGER
 			type2 = TYPE_CHAR
 		][
 			int: as red-integer! right
-			right/value: integer/to-float int/value
+			right/value: as-float int/value
 		]
-
-		if all [							;-- convert percent! to float!
+		pct?:  all [
 			type1 = TYPE_PERCENT
 			type2 <> TYPE_PERCENT
-		][
-			left/header: TYPE_FLOAT
 		]
+		if pct? [left/header: TYPE_FLOAT]			;-- convert percent! to float!
+		
+		op1: left/value
+		op2: right/value
+		
+		t1?: all [type1 = TYPE_TIME type2 <> TYPE_TIME]
+		t2?: all [type1 <> TYPE_TIME type2 = TYPE_TIME]
+		
+		if t1? [op1: op1 * time/nano]
+		if t2? [op2: op2 * time/nano]
 
-		left/value: do-math-op left/value right/value type
+		left/value: do-math-op op1 op2 type
+		
+		if any [t1? t2?][
+			left/header: TYPE_TIME
+			left/value: left/value * time/oneE9
+		]
+		if pct? [left/header: TYPE_PERCENT]
 		left
 	]
 
@@ -358,40 +373,84 @@ float: context [
 		fl
 	]
 
-	;-- Actions --
-
-	make: func [
-		proto	 [red-value!]	
-		spec	 [red-value!]
-		return:	 [red-float!]
+	from-binary: func [
+		bin		[red-binary!]
+		return: [float!]
 		/local
-			int	 [red-integer!]
-			fl	 [red-float!]
+			s		[series!]
+			p		[byte-ptr!]
+			len		[integer!]
+			part	[integer!]
+			int2	[integer!]
+			int1	[integer!]
+			pf		[pointer! [float!]]
+			factor	[integer!]
+			f64?	[logic!]
 	][
-		#if debug? = yes [if verbose > 0 [print-line "float/make"]]
+		s: GET_BUFFER(bin)
+		len: (as-integer s/tail - s/offset) + bin/head
+		if len > 8 [len: 8]							;-- take first 32 bits only
+		f64?: either len > 4 [part: 4 yes][part: len no]
 
-		switch TYPE_OF(spec) [
-			TYPE_FLOAT [
-				as red-float! spec
+		int2: 0
+		int1: 0
+		factor: 0
+		p: (as byte-ptr! s/offset) + bin/head + len - 1
+
+		loop part [
+			int1: int1 or ((as-integer p/value) << factor)
+			factor: factor + 8
+			p: p - 1
+		]
+		if f64? [
+			factor: 0
+			part: len - 4
+			loop part [
+				int2: int2 or ((as-integer p/value) << factor)
+				factor: factor + 8
+				p: p - 1
 			]
+		]
+		pf: as pointer! [float!] :int1
+		pf/value
+	]
+
+	get-rs-float: func [
+		val		[red-float!]
+		return: [float!]
+		/local
+			int [red-integer!]
+	][
+		switch TYPE_OF(val) [
 			TYPE_INTEGER [
-				fl: as red-float! spec
-				int: as red-integer! spec
-				fl/value: integer/to-float int/value
-				fl/header: TYPE_FLOAT
-				fl
+				int: as red-integer! val
+				as float! int/value
 			]
-			TYPE_PERCENT [
-				fl: as red-float! spec
-				fl/header: TYPE_FLOAT
-				fl
-			]
+			TYPE_FLOAT [val/value]
 			default [
-				--NOT_IMPLEMENTED--
-				as red-float! spec					;@@ just for making it compilable
+				fire [TO_ERROR(script bad-to-arg) datatype/push TYPE_FLOAT val]
+				0.0
 			]
 		]
 	]
+
+	from-block: func [
+		blk		[red-block!]
+		return: [float!]
+		/local
+			val [red-float!]
+			f	[float!]
+			int [integer!]
+	][
+		val: as red-float! block/rs-head blk
+		int: as-integer get-rs-float val + 1
+		f: pow 10.0 as float! int
+		f * get-rs-float val
+	]
+
+	;-- Actions --
+
+	;-- make: :to
 
 	random: func [
 		f		[red-float!]
@@ -400,16 +459,17 @@ float: context [
 		only?   [logic!]
 		return: [red-float!]
 		/local
-			t	[float!]
 			s	[float!]
 	][
 		#if debug? = yes [if verbose > 0 [print-line "float/random"]]
 
 		either seed? [
-			_random/srand to-integer f/value
+			s: f/value
+			if TYPE_OF(f) = TYPE_TIME [s: s / time/oneE9]
+			_random/srand as-integer s
 			f/header: TYPE_UNSET
 		][
-			s: (integer/to-float _random/rand) / 2147483647.0
+			s: (as-float _random/rand) / 2147483647.0
 			if s < 0.0 [s: 0.0 - s]
 			f/value: s * f/value
 		]
@@ -417,38 +477,62 @@ float: context [
 	]
 
 	to: func [
-		type	[red-datatype!]
-		spec	[red-float!]
-		return: [red-value!]
+		proto	[red-float!]
+		spec	[red-value!]
+		type	[integer!]								;-- target type
+		return:	[red-float!]
 		/local
-			fl  [red-float!]
 			int [red-integer!]
-			buf [red-string!]
-			f	[float!]
+			tm	[red-time!]
+			blk [red-block!]
+			v	[red-integer!]
 	][
 		#if debug? = yes [if verbose > 0 [print-line "float/to"]]
 
-		f: spec/value
-		switch type/value [
-			TYPE_INTEGER [
-				int: as red-integer! type
-				int/header: TYPE_INTEGER
-				int/value: to-integer f
+		proto/header: type
+		switch TYPE_OF(spec) [
+			TYPE_INTEGER
+			TYPE_CHAR [
+				int: as red-integer! spec
+				proto/value: as-float int/value
 			]
+			TYPE_TIME [
+				tm: as red-time! spec
+				proto/value: tm/time / time/oneE9
+			]
+			TYPE_ANY_STRING [
+				proto: as red-float! load-value as red-string! spec
+
+				switch TYPE_OF(proto) [
+					TYPE_FLOAT	
+					TYPE_PERCENT [0]				;-- most common case
+					TYPE_INTEGER [
+						int: as red-integer! proto
+						proto/value: as float! int/value
+					]
+					default [
+						fire [TO_ERROR(script bad-to-arg) datatype/push type proto]
+					]
+				]
+				proto/header: type
+			]
+			TYPE_BINARY [
+				proto/value: from-binary as red-binary! spec
+			]
+			TYPE_ANY_LIST [
+				if 2 <> block/rs-length? as red-block! spec [
+					fire [TO_ERROR(script bad-to-arg) datatype/push type spec]
+				]
+				proto/value: from-block as red-block! spec
+			]
+			TYPE_FLOAT
 			TYPE_PERCENT [
-				fl: as red-float! type
-				fl/header: TYPE_PERCENT
-				fl/value: f
+				spec/header: type
+				proto: as red-float! spec
 			]
-			TYPE_STRING [
-				buf: string/rs-make-at as cell! type 1			;-- 16 bits string
-				string/concatenate-literal buf form-float f FORM_FLOAT_64
-			]
-			default [
-				--NOT_IMPLEMENTED--
-			]
+			default [fire [TO_ERROR(script bad-to-arg) datatype/push type spec]]
 		]
-		as red-value! type
+		proto
 	]
 
 	form: func [
@@ -493,10 +577,10 @@ float: context [
 		m: as int-ptr! :value
 		n: m + 1
 		either n/value and 7FF00000h = 7FF00000h [		;-- the exponent bits are all ones
-			either any [								;-- the fraction bits are not entirely zeros
+			any [										;-- the fraction bits are not entirely zeros
 				m/value <> 0
 				n/value and 000FFFFFh <> 0
-			] [true][false]
+			]
 		][false]
 	]
 
@@ -520,8 +604,8 @@ float: context [
 			hi2  [byte-ptr!]
 			diff [byte-ptr!]
 	][
-		if left = right [return true]					;-- for NaN, also raise error in default mode
 		if any [NaN? left NaN? right] [return false]
+		if left = right [return true]					;-- for NaN, also raise error in default mode
 
 		if DBL_EPSILON > abs left - right [return true] ;-- check if the numbers are really close, use an absolute epsilon
 
@@ -584,7 +668,7 @@ float: context [
 		#if debug? = yes [if verbose > 0 [print-line "float/compare"]]
 
 		if all [
-			op = COMP_STRICT_EQUAL
+			any [op = COMP_SAME op = COMP_STRICT_EQUAL]
 			TYPE_OF(value1) <> TYPE_OF(value2)
 		][return 1]
 
@@ -594,8 +678,9 @@ float: context [
 			TYPE_CHAR
 			TYPE_INTEGER [
 				int: as red-integer! value2
-				right: integer/to-float int/value
+				right: as-float int/value
 			]
+			TYPE_TIME
 			TYPE_PERCENT
 			TYPE_FLOAT [right: value2/value]
 			default [RETURN_COMPARE_OTHER]
@@ -678,7 +763,7 @@ float: context [
 		exp: base + 1
 		if TYPE_OF(exp) = TYPE_INTEGER [
 			int: as red-integer! exp
-			exp/value: integer/to-float int/value
+			exp/value: as-float int/value
 		]
 		base/value: pow base/value exp/value
 		base
@@ -734,7 +819,7 @@ float: context [
 		if OPTION?(scale) [
 			if TYPE_OF(scale) = TYPE_INTEGER [
 				int: as red-integer! value
-				int/value: to-integer dec
+				int/value: as-integer dec
 				int/header: TYPE_INTEGER
 				return integer/round value as red-integer! scale _even? down? half-down? floor? ceil? half-ceil?
 			]
@@ -790,7 +875,7 @@ float: context [
 			TYPE_VALUE
 			"float!"
 			;-- General actions --
-			:make
+			:to
 			:random
 			null			;reflect
 			:to
@@ -829,6 +914,7 @@ float: context [
 			null			;index?
 			null			;insert
 			null			;length?
+			null			;move
 			null			;next
 			null			;pick
 			null			;poke

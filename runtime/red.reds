@@ -13,6 +13,7 @@ Red/System [
 red: context [
 	;-- Runtime sub-system --
 	
+	#include %definitions.reds
 	#include %macros.reds
 	#include %tools.reds
 	
@@ -61,6 +62,7 @@ red: context [
 	#include %datatypes/series.reds
 	#include %datatypes/block.reds
 	#include %datatypes/string.reds
+	#include %datatypes/time.reds
 	#include %datatypes/integer.reds
 	#include %datatypes/symbol.reds
 	#include %datatypes/context.reds
@@ -96,6 +98,8 @@ red: context [
 	#include %datatypes/percent.reds
 	#include %datatypes/tuple.reds
 	#include %datatypes/binary.reds
+	#include %datatypes/tag.reds
+	#include %datatypes/email.reds
 	#if OS = 'Windows [#include %datatypes/image.reds]	;-- temporary
 	
 	;-- Debugging helpers --
@@ -115,9 +119,9 @@ red: context [
 	#include %utils.reds
 
 	_root:	 	declare red-block!						;-- statically alloc root cell for bootstrapping
-	root:	 	declare red-block!						;-- root block
-	symbols: 	declare red-block! 						;-- symbols table
-	global-ctx: declare node!							;-- global context
+	root:	 	as red-block! 0							;-- root block
+	symbols: 	as red-block! 0 						;-- symbols table
+	global-ctx: as node! 0								;-- global context
 	verbosity:  0
 
 	;-- Booting... --
@@ -157,8 +161,8 @@ red: context [
 		routine/init
 		paren/init
 		issue/init
-		file/init
 		url/init
+		file/init										;-- file! inherits from url!
 		object/init
 		bitset/init
 		point/init
@@ -171,6 +175,9 @@ red: context [
 		pair/init
 		percent/init
 		tuple/init
+		time/init
+		tag/init
+		email/init
 		#if OS = 'Windows [image/init]					;-- temporary
 		
 		actions/init
@@ -189,6 +196,7 @@ red: context [
 		datatype/make-words								;-- build datatype names as word! values
 		words/build										;-- create symbols used internally
 		refinements/build								;-- create refinements used internally
+		issues/build									;-- create issues used internally
 		natives/init									;-- native specific init code
 		parser/init
 		_random/init
@@ -196,7 +204,7 @@ red: context [
 		crypto/init
 		
 		stack/init
-		redbin/boot-load
+		redbin/boot-load system/boot-data no
 		
 		#if debug? = yes [
 			datatype/verbose:	verbosity
@@ -236,6 +244,9 @@ red: context [
 			pair/verbose:		verbosity
 			percent/verbose:	verbosity
 			tuple/verbose:		verbosity
+			time/verbose:		verbosity
+			tag/verbose:		verbosity
+			email/verbose:		verbosity
 			#if OS = 'Windows [image/verbose: verbosity]
 
 			actions/verbose:	verbosity
@@ -244,6 +255,14 @@ red: context [
 
 			stack/verbose:		verbosity
 			unicode/verbose:	verbosity
+		]
+	]
+	
+	#if type = 'dll [
+		boot: does [
+			***-boot-rs
+			red/init
+			***-main
 		]
 	]
 ]

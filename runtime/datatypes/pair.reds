@@ -55,44 +55,50 @@ pair: context [
 		]
 		left
 	]
-
-	make-in: func [
-		parent 	[red-block!]
+	
+	make-at: func [
+		slot 	[red-value!]
 		x 		[integer!]
 		y 		[integer!]
-		/local
-			pair [red-pair!]
-	][
-		#if debug? = yes [if verbose > 0 [print-line "pair/make-in"]]
-		
-		pair: as red-pair! ALLOC_TAIL(parent)
-		pair/header: TYPE_PAIR
-		pair/x: x
-		pair/y: y
-	]
-	
-	push: func [
-		value	[integer!]
-		value2  [integer!]
 		return: [red-pair!]
 		/local
 			pair [red-pair!]
 	][
-		#if debug? = yes [if verbose > 0 [print-line "pair/push"]]
+		#if debug? = yes [if verbose > 0 [print-line "pair/make-at"]]
 		
-		pair: as red-pair! stack/push*
+		pair: as red-pair! slot
 		pair/header: TYPE_PAIR
-		pair/x: value
-		pair/y: value2
+		pair/x: x
+		pair/y: y
 		pair
+	]
+	
+	make-in: func [
+		parent 	[red-block!]
+		x 		[integer!]
+		y 		[integer!]
+		return: [red-pair!]
+	][
+		#if debug? = yes [if verbose > 0 [print-line "pair/make-in"]]
+		make-at ALLOC_TAIL(parent) x y
+	]
+	
+	push: func [
+		x		[integer!]
+		y		[integer!]
+		return: [red-pair!]
+	][
+		#if debug? = yes [if verbose > 0 [print-line "pair/push"]]
+		make-at stack/push* x y
 	]
 
 	;-- Actions --
 	
 	make: func [
-		proto	 [red-value!]
-		spec	 [red-value!]
-		return:	 [red-pair!]
+		proto	[red-value!]
+		spec	[red-value!]
+		type	[integer!]
+		return:	[red-pair!]
 		/local
 			int	 [red-integer!]
 			int2 [red-integer!]
@@ -107,6 +113,12 @@ pair: context [
 				int: as red-integer! spec
 				push int/value int/value
 			]
+			TYPE_FLOAT
+			TYPE_PERCENT [
+				fl: as red-float! spec
+				x: as-integer fl/value
+				push x x
+			]
 			TYPE_BLOCK [
 				int: as red-integer! block/rs-head as red-block! spec
 				int2: int + 1
@@ -119,20 +131,21 @@ pair: context [
 				]
 				x: either TYPE_OF(int) = TYPE_FLOAT [
 					fl: as red-float! int
-					float/to-integer fl/value
+					as-integer fl/value
 				][
 					int/value
 				]
 				y: either TYPE_OF(int2) = TYPE_FLOAT [
 					fl: as red-float! int2
-					float/to-integer fl/value
+					as-integer fl/value
 				][
 					int2/value
 				]	
 				push x y
 			]
+			TYPE_PAIR [as red-pair! spec]
 			default [
-				fire [TO_ERROR(script invalid-type) spec]
+				fire [TO_ERROR(script bad-to-arg) datatype/push TYPE_PAIR spec]
 				push 0 0
 			]
 		]
@@ -260,6 +273,9 @@ pair: context [
 	][
 		#if debug? = yes [if verbose > 0 [print-line "pair/compare"]]
 
+		if TYPE_OF(right) <> TYPE_PAIR [
+			return either op = COMP_STRICT_EQUAL [1][RETURN_COMPARE_OTHER]
+		]
 		diff: left/y - right/y
 		if zero? diff [diff: left/x - right/x]
 		SIGN_COMPARE_RESULT(diff 0)
@@ -365,7 +381,7 @@ pair: context [
 			:make
 			:random
 			null			;reflect
-			null			;to
+			:make			;to
 			:form
 			:mold
 			:eval-path
@@ -401,6 +417,7 @@ pair: context [
 			null			;index?
 			null			;insert
 			null			;length?
+			null			;move
 			null			;next
 			:pick
 			null			;poke

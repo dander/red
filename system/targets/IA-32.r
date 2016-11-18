@@ -86,24 +86,93 @@ make-profilable make target-class [
 		data
 	]
 	
-	emit-float: func [arg opcode [binary!]][
-		emit either any [
-			arg == 4
-			'float32! = first compiler/get-type arg 
-		][
-			opcode and #{F9FF}
-		][
-			opcode
+	emit-variable: func [
+		name  [word! object!] 
+		gcode [binary! block! none!]					;-- global opcodes
+		pcode [binary! block! none!]					;-- PIC opcodes
+		lcode [binary! block!] 							;-- local opcodes
+		/local offset byte code spec
+	][
+		if object? name [name: compiler/unbox name]
+		
+		case [
+			offset: select emitter/stack name [
+				offset: stack-encode offset 			;-- local variable case
+				either block? lcode: adjust-disp32 lcode offset [
+					emit reduce bind lcode 'offset
+				][
+					emit lcode
+					emit offset
+				]
+			]
+			PIC? [										;-- global variable case (PIC version)
+				spec: emitter/symbols/:name
+				either spec/1 = 'import-var [
+					emit #{8BB3}					;-- MOV esi, [ebx+<import disp>]
+					emit-reloc-addr spec
+					emit (#{FF7E} and copy pcode) or #{0004} ;-- [ebx+<disp>] => [esi]
+				][
+					either block? pcode [
+						foreach code reduce pcode [
+							either code = 'address [
+								emit-reloc-addr spec
+							][
+								emit code
+							]
+						]
+					][
+						emit pcode
+						emit-reloc-addr spec
+					]
+				]
+			]
+			'global [									;-- global variable case
+				spec: emitter/symbols/:name
+				either spec/1 = 'import-var [
+					emit #{8B3D}					;-- MOV edi, [<import>]
+					emit-reloc-addr spec
+					emit (#{FF7E} and copy pcode) or #{0005} ;-- [ebx+<disp>] => [edi]
+				][
+					either block? gcode [
+						foreach code reduce gcode [
+							either code = 'address [
+								emit-reloc-addr spec
+							][
+								emit code
+							]
+						]
+					][
+						emit gcode
+						emit-reloc-addr spec
+					]
+				]
+			]
 		]
 	]
 	
-	emit-float-variable: func [name [word! object!] gcode [binary!] pcode [binary!] lcode [binary!]][
-		if 'float32! = first compiler/get-type name [
-			gcode: gcode and #{F9FF}
-			pcode: pcode and #{F9FF}
-			lcode: lcode and #{F9FF} 
+	emit-float: func [opcode [binary!]][
+		emit either width = 4 [opcode and #{F9FF}][opcode]
+	]
+
+	emit-float-arg: func [arg opcode [binary!]][
+		emit switch/default first compiler/get-type arg [
+			float32! [opcode and #{F9FF}]
+			integer! [opcode and #{F0FF} or #{0B00}]
+		][
+			opcode
+		]
+	]	
+	emit-float-variable: func [
+		name [word! object!] gcode [binary!] pcode [binary!] lcode [binary!]
+		/local codes type
+	][
+		codes: [gcode pcode lcode]
+		switch type: first compiler/get-type name [
+			float32! [foreach c codes [set c (get c) and #{F9FF}]]
+			integer! [foreach c codes [set c (get c) and #{F0FF} or #{0B00}]]
 		]
 		emit-variable name gcode pcode lcode
+		type
 	]
 	
 	load-float-variable: func [name [word! object!]][
@@ -178,7 +247,7 @@ make-profilable make target-class [
 		]
 	]
 	
-	emit-casting: func [value [object!] alt? [logic!] /local type old][
+	emit-casting: func [value [object!] alt? [logic!] /push /local type old][
 		type: compiler/get-type value/data	
 		case [
 			value/type/1 = 'logic! [
@@ -204,45 +273,65 @@ make-profilable make target-class [
 				emit pick [#{81E2} #{25}] alt?    	;-- AND edx|eax, 000000FFh 
 				emit to-bin32 255
 			]
-			all [value/type/1 = 'integer! type/1 = 'float32!][
-				if verbose >= 3 [print [">>>converting from float32! to integer!"]]
+			all [value/type/1 = 'integer! find [float! float64! float32!] type/1][
+				if verbose >= 3 [print [">>>converting from" type/1 "to integer!"]]
 				emit #{83EC04}						;-- SUB esp, 4
-				emit #{D91C24}						;-- FSTP dword [esp]	; save as 32-bit
-				either alt? [
-					emit #{5A}						;-- POP edx
+				either compiler/job/cpu-version >= 4.0 [ ;-- Only CPUs with SSE3, >= Pentium 4
+					emit #{DB0C24}					;-- FISTTP dword [esp]	; save as 32-bit truncated
 				][
-					emit #{58}						;-- POP eax
+					emit-push to integer! #{0E7F}	;-- set FPU_X87_ROUNDING_ZERO mode
+					emit #{D92C24}					;-- FLDCW [esp]
+					emit #{83C404}					;-- ADD esp, 4			; free space
+					emit #{DB1C24}					;-- FISTP dword [esp]	; save as 32-bit
+					emit #{D92D}					;-- FLDCW [<word>]	 	; global
+					emit-reloc-addr fpu-cword/2		;-- one-based index
+				]
+				unless push [
+					either alt? [
+						emit #{5A}					;-- POP edx
+					][
+						emit #{58}					;-- POP eax
+					]
 				]
 			]
 			all [value/type/1 = 'float32! type/1 = 'integer!][
-				if verbose >= 3 [print [">>>converting from integer! to float32!"]]
+				if verbose >= 3 [print ">>>converting from integer! to float32!"]
 				either alt? [
 					emit #{52}						;-- PUSH edx
 				][
 					emit #{50}						;-- PUSH eax
 				]
-				emit #{D90424}						;-- FLD dword [esp]		; load as 32-bit
-				emit #{83C404}						;-- ADD esp, 4			; free space
-			]
-			all [find [float! float64!] value/type/1 find [float32! integer!] type/1][
-				if verbose >= 3 [print [">>>converting from" mold/flat type/1 "to float!"]]
-				either type/1 = 'integer! [
-					either alt? [
-						emit #{52}					;-- PUSH edx
-					][
-						emit #{50}					;-- PUSH eax
-					]
-					emit #{D90424}					;-- FLD dword [esp]		; load as 32-bit
-					emit #{83EC04}					;-- SUB esp, 4			; alloc more space for 64-bit float
+				emit #{DB0424}						;-- FILD dword [esp]	; load as 32-bit
+				either push [
+					emit #{D91C24}					;-- FSTP dword [esp]	; save as 32-bit
 				][
-					emit #{83EC08}					;-- SUB esp, 8			; alloc space for 64-bit float
+					emit #{83C404}					;-- ADD esp, 4			; free space
 				]
+			]
+			all [find [float! float64!] value/type/1 type/1 = 'integer!][
+				if verbose >= 3 [print ">>>converting from integer! to float!"]
+				either alt? [
+					emit #{52}						;-- PUSH edx
+				][
+					emit #{50}						;-- PUSH eax
+				]
+				emit #{DB0424}						;-- FILD dword [esp]	; load as 32-bit
+				either push [
+					emit #{83EC04}					;-- SUB esp, 4			; alloc more space for 64-bit float
+					emit #{DD1C24}					;-- FSTP qword [esp]	; save as 64-bit
+				][
+					emit #{83C404}					;-- ADD esp, 4			; free space
+				]
+			]
+			all [find [float! float64!] value/type/1 type/1 = 'float32!][
+				if verbose >= 3 [print ">>>converting from float32! to float!"]
+				emit #{83EC08}						;-- SUB esp, 8			; alloc space for 64-bit float
 				emit #{DD1C24}						;-- FSTP qword [esp]	; save as 64-bit
 				emit #{DD0424}						;-- FLD qword [esp]		; load as 64-bit
 				emit #{83C408}						;-- ADD esp, 8			; free space
 			]
 			all [value/type/1 = 'float32! find [float! float64!] type/1][
-				if verbose >= 3 [print [">>>converting from float! to float32!"]]
+				if verbose >= 3 [print ">>>converting from float! to float32!"]
 				emit #{83EC04}						;-- SUB esp, 4			; alloc space for 32-bit float
 				emit #{D91C24}						;-- FSTP dword [esp]	; save as 32-bit
 				emit #{D90424}						;-- FLD dword [esp]		; load as 32-bit
@@ -402,6 +491,11 @@ make-profilable make target-class [
 		emit #{9BDBE3}								;-- FINIT			; init x87 FPU
 	]
 	
+	emit-get-overflow: does [
+		emit #{0F90C0}								;-- SETO al
+		emit #{83E001}								;-- AND eax, 1
+	]
+	
 	emit-get-pc: func [/ebx][
 		emit #{E800000000}							;-- CALL next		; call the next instruction
 		either ebx [
@@ -540,7 +634,7 @@ make-profilable make target-class [
 			decimal! [
 				set-width any [cast value]
 				emit-push any [cast value]
-				emit-float width #{DD0424}			;-- FLD [esp]
+				emit-float #{DD0424}				;-- FLD [esp]
 				emit #{83C4} 						;-- ADD esp, 8|4
 				emit to-bin8 pick [4 8] to logic! all [cast cast/type/1 = 'float32!]
 			]
@@ -565,10 +659,15 @@ make-profilable make target-class [
 			]
 			get-word! [
 				value: to word! value
-				
-				either all [
-					spec: select compiler/functions value
-					spec/2 = 'routine
+				either any [
+					all [
+						spec: select compiler/functions value
+						spec/2 = 'routine
+					]
+					all [
+						select emitter/stack value
+						'function! = first compiler/get-type value
+					]
 				][
 					either alt [
 						emit-variable value
@@ -583,11 +682,12 @@ make-profilable make target-class [
 					]
 				][
 					either offset: select emitter/stack value [
-						emit pick [
+						offset: stack-encode offset	;-- n
+						emit adjust-disp32 pick [
 							#{8D55}					;-- LEA edx, [ebp+n]	; local
 							#{8D45}					;-- LEA eax, [ebp+n]	; local
-						] alt
-						emit stack-encode offset	;-- n
+						] alt offset
+						emit offset
 					][
 						either PIC? [
 							emit pick [
@@ -679,9 +779,9 @@ make-profilable make target-class [
 						emit #{8D83}				;-- LEA eax, [ebx+disp]	; PIC
 						emit-reloc-addr value
 						emit-variable name
-						#{A3}						;-- MOV [name], eax		; global
-						#{8983}						;-- MOV [ebx+disp], eax	; PIC
-						#{8945}						;-- MOV [ebp+n], eax	; local
+							#{A3}					;-- MOV [name], eax		; global
+							#{8983}					;-- MOV [ebx+disp], eax	; PIC
+							#{8945}					;-- MOV [ebp+n], eax	; local
 					][
 						do store-dword
 						emit-reloc-addr value
@@ -730,9 +830,9 @@ make-profilable make target-class [
 		
 		either compiler/any-float? type [
 			either zero? offset [
-				emit-float width #{DD00}			;-- FLD [eax]
+				emit-float #{DD00}					;-- FLD [eax]
 			][
-				emit-float width #{DD80}			;-- FLD [eax+offset]
+				emit-float #{DD80}					;-- FLD [eax+offset]
 				emit to-bin32 offset
 			]
 		][
@@ -812,15 +912,15 @@ make-profilable make target-class [
 
 			either integer? idx [
 				either zero? idx: idx - 1 [			;-- indexes are one-based
-					emit-float width opcodes/1
+					emit-float opcodes/1
 				][
 					offset: idx * emitter/size-of? type/2/1	;-- scaled index up
-					emit-float width opcodes/2
+					emit-float opcodes/2
 					emit to-bin32 offset
 				]
 			][
 				emit-load-index idx
-				emit-float width opcodes/3
+				emit-float opcodes/3
 				emit select [4 #{B8} 8 #{F8}] width
 			]
 		][
@@ -861,14 +961,25 @@ make-profilable make target-class [
 
 	emit-store-path: func [
 		path [set-path!] type [word!] value parent [block! none!]
-		/local idx offset
+		/local idx offset type2 spec
 	][
 		if verbose >= 3 [print [">>>storing path:" mold path mold value]]
 
 		unless value = <last> [
 			if parent [emit #{89C2}]				;-- MOV edx, eax			; save value/address
 			emit-load value
-			emit #{92}								;-- XCHG eax, edx			; save value/restore address
+			all [
+				object? value
+				not all [decimal? value/data 'float32! = value/type/1]
+				emit-casting value no
+			]
+			unless all [
+				type = 'struct!
+				word? path/2
+				spec: any [parent second compiler/resolve-type path/1]
+				type2: select spec path/2
+				compiler/any-float? type2
+			][emit #{92}]							;-- XCHG eax, edx			; save value/restore address
 		]
 
 		switch type [
@@ -883,9 +994,9 @@ make-profilable make target-class [
 				
 				either compiler/any-float? type [
 					either zero? offset [
-						emit-float width #{DD18}	;-- FSTP [eax]
+						emit-float #{DD18}			;-- FSTP [eax]
 					][
-						emit-float width #{DD98}	;-- FSTP [eax+offset]
+						emit-float #{DD98}			;-- FSTP [eax+offset]
 						emit to-bin32 offset
 					]
 				][
@@ -957,7 +1068,8 @@ make-profilable make target-class [
 		value [char! logic! integer! word! block! string! tag! path! get-word! object! decimal!]
 		/with cast [object!]
 		/cdecl										;-- external call
-		/local spec type offset
+		/keep
+		/local spec type offset conv-int-float?
 	][
 		if verbose >= 3 [print [">>>pushing" mold value]]
 		if block? value [value: <last>]
@@ -967,7 +1079,7 @@ make-profilable make target-class [
 				either compiler/any-float? compiler/last-type [
 					set-width/type any [all [cast cast/type] compiler/last-type]
 					emit join #{83EC} to-bin8 width	;-- SUB esp, 8|4
-					emit-float width #{DD1C24}		;-- FSTP [esp]
+					emit-float #{DD1C24}			;-- FSTP [esp]
 				][
 					emit #{50}						;-- PUSH eax
 				]
@@ -1014,7 +1126,7 @@ make-profilable make target-class [
 					emit #{83EC}					;-- SUB esp, 8|4
 					emit to-bin8 width
 					load-float-variable value
-					emit-float width #{DD1C24}		;-- FSTP [esp]			; push double on stack
+					emit-float #{DD1C24}			;-- FSTP [esp]			; push double on stack
 				][
 					emit-variable value
 						#{FF35}						;-- PUSH [value]		; global
@@ -1025,9 +1137,18 @@ make-profilable make target-class [
 			get-word! [
 				value: to word! value
 				either offset: select emitter/stack value [
-					emit #{8D45}					;-- LEA eax, [ebp+n]	; local
-					emit stack-encode offset		;-- n
-					emit #{50}						;-- PUSH eax
+					either 'function! = first compiler/get-type value [
+						emit-variable value
+							none
+							none
+							#{FF75}					;-- PUSH [ebp+n]		; local
+					][
+						emit-variable value
+							none
+							none
+							#{8D45}					;-- LEA eax, [ebp+n]	; local
+						emit #{50}					;-- PUSH eax
+					]
 				][
 					either PIC? [
 						emit #{8D83}				;-- LEA eax, [ebx+disp]	; PIC
@@ -1059,19 +1180,34 @@ make-profilable make target-class [
 				][
 					compiler/resolve-path-type value
 				]
-				emit-push <last>
+				unless keep [emit-push <last>]
 			]
 			object! [
-				unless any [
-					path? value/data
-					compiler/any-float? compiler/get-type value/data 
-				][
-					emit-casting value no
+				type: compiler/get-type value/data
+				
+				conv-int-float?: any [
+					all [
+						find [float! float64! float32!] value/type/1
+						type/1 = 'integer!
+					]
+					all [
+						find [float! float64! float32!] type/1
+						value/type/1 = 'integer!
+					]
 				]
-				either cdecl [
-					emit-push/with/cdecl value/data value
-				][
-					emit-push/with value/data value
+				all [
+					conv-int-float?
+					not find [block! tag!] type?/word value/data
+					emit-load value/data
+				]
+				either keep [emit-casting value no][emit-casting/push value no]
+				
+				unless conv-int-float? [
+					either cdecl [
+						emit-push/with/cdecl value/data value
+					][
+						emit-push/with value/data value
+					]
 				]
 			]
 		]
@@ -1343,8 +1479,6 @@ make-profilable make target-class [
 				]
 			]
 		]
-		;TBD: test overflow and raise exception ? (or store overflow flag in a variable??)
-		; JNO? (Jump if No Overflow)
 	]
 	
 	emit-integer-operation: func [name [word!] args [block!] /local a b sorted? left right][
@@ -1413,7 +1547,11 @@ make-profilable make target-class [
 		if object? args/1 [emit-casting args/1 no]	;-- do runtime conversion on eax if required
 
 		;-- Operator and second operand processing
-		either all [object? args/2 find [imm reg] b][
+		either all [
+			object? args/2
+			find [imm reg] b
+			args/2/type/1 <> 'integer!				;-- skip explicit casting to integer! (implicit)
+		][
 			emit-casting args/2 yes					;-- do runtime conversion on edx if required
 		][
 			implicit-cast right
@@ -1490,7 +1628,7 @@ make-profilable make target-class [
 
 	emit-float-operation: func [
 		name [word!] args [block!] 
-		/local a b left right spec load-from-stack reversed?
+		/local a b left right spec load-from-stack reversed? type
 	][
 		if verbose >= 3 [print [">>>inlining float op:" mold name mold args]]
 
@@ -1504,67 +1642,68 @@ make-profilable make target-class [
 		set-width left
 		
 		load-from-stack: [
-			emit-float width #{DD0424}				;-- FLD [esp]
+			emit-float #{DD0424}					;-- FLD [esp]
 			emit #{83C4} 							;-- ADD esp, 8|4
 			emit to-bin8 width		
 		]
-
 		switch a [									;-- load left operand on FPU stack
 			imm [
 				spec: emitter/store-value none args/1 compiler/get-type args/1
 				either PIC? [
-					emit-float args/1 #{DD83}		;-- FLD [ebx+disp]	; PIC
+					emit-float-arg args/1 #{DD83}	;-- FLD [ebx+disp]	; PIC
 				][
-					emit-float args/1 #{DD05}		;-- FLD [<float>]	; global
+					emit-float-arg args/1 #{DD05}	;-- FLD [<float>]	; global
 				]
 				emit-reloc-addr spec/2
 				set-width args/1
 			]
-			ref [			
-				load-float-variable left
-				if object? args/1 [emit-casting args/1 no]
+			ref [
+				type: load-float-variable left
+				all [
+					object? args/1
+					not find [float32! integer!] type
+					emit-casting args/1 no
+				]
 			]
 			reg [
 				if object? args/1 [
 					if block? left [emit-casting args/1 no]
 					set-width/type compiler/last-type: args/1/type
 				]
-				if path? left [
-					emit-push args/1				;-- late path loading
-					do load-from-stack
-				]
+				if path? left [emit-push/keep args/1] ;-- late path loading
 			]
 		]		
 		switch b [									;-- load right operand on FPU stack
 			imm [
 				spec: emitter/store-value none args/2 compiler/get-type args/2
 				either PIC? [
-					emit-float args/2 #{DD83}		;-- FLD [ebx+disp]	; PIC
+					emit-float-arg args/2 #{DD83}	;-- FLD [ebx+disp]	; PIC
 				][
-					emit-float args/2 #{DD05}		;-- FLD [<float>]	; global
+					emit-float-arg args/2 #{DD05}	;-- FLD [<float>]	; global
 				]
 				emit-reloc-addr spec/2
 			]
 			ref [
-				load-float-variable right
-				if object? args/2 [emit-casting args/2 no]
+				type: load-float-variable right
+				all [
+					object? args/2
+					not find [float32! integer!] type
+					emit-casting args/2 no
+				]
 			]
 			reg [
 				if all [object? args/2 block? right][
 					emit-casting args/2 no
 				]
-				if path? right [
-					emit-push args/2
-					do load-from-stack
-				]
+				if path? right [emit-push/keep args/2] ;-- late path loading
 			]
 		]
 		
-		reversed?: to logic! any [
-			all [b = 'reg any [all [a = 'ref block? right] all [a = 'imm block? right]]]
-			all [a = 'reg any [all [b = 'ref path? left] all [b = 'imm path? left]]]
-		]
-		
+		reversed?: to logic! all [b = 'reg any [
+			all [a = 'ref block? right]
+			all [a = 'imm block? right]
+			all [path? left block? right]
+		]]
 		case [
 			find comparison-op name [emit-float-comparison-op name a b args reversed?]
 			find math-op	   name	[emit-float-math-op		  name a b args reversed?]
@@ -1673,7 +1812,20 @@ make-profilable make target-class [
 		]
 	]
 	
-	emit-call-import: func [args [block!] fspec [block!] spec [block!] attribs [block! none!]][
+	emit-variadic-data: func [args [block!] /local total][
+		emit-push call-arguments-size? args/2		;-- push arguments total size in bytes 
+													;-- (required to clear stack on stdcall return)
+		emit #{8D742404}							;-- LEA esi, [esp+4]	; skip last pushed value
+		emit #{56}									;-- PUSH esi			; push arguments list pointer
+		total: length? args/2
+		if args/1 = #typed [total: total / 3]		;-- typed args have 3 components
+		emit-push total								;-- push arguments count
+	]
+	
+	emit-call-import: func [args [block!] fspec [block!] spec [block!] attribs [block! none!] /local cdecl?][
+		cdecl?: fspec/3 = 'cdecl
+		if all [issue? args/1 not cdecl?][emit-variadic-data args]
+
 		either compiler/job/OS = 'MacOSX [
 			either PIC? [
 				emit #{8D83}						;-- LEA eax, [ebx+disp]	; PIC
@@ -1685,12 +1837,16 @@ make-profilable make target-class [
 		][
 			emit-indirect-call spec
 		]
-		if fspec/3 = 'cdecl [						;-- add calling cleanup when required
-			emit-cdecl-pop fspec args
-		]
+		if cdecl? [emit-cdecl-pop fspec args]		;-- add calling cleanup when required
 	]
 
-	emit-call-native: func [args [block!] fspec [block!] spec [block!] attribs [block! none!] /routine name [word!] /local total][
+	emit-call-native: func [
+		args [block!] fspec [block!] spec [block!] attribs [block! none!]
+		/routine name [word!]
+		/local cdecl?
+	][
+		cdecl?: fspec/3 = 'cdecl
+		
 		either routine [
 			either 'local = last fspec [
 				name: pick tail fspec -2
@@ -1704,21 +1860,11 @@ make-profilable make target-class [
 				emit-indirect-call spec
 			]
 		][
-			if issue? args/1 [							;-- variadic call
-				emit-push call-arguments-size? args/2	;-- push arguments total size in bytes 
-														;-- (required to clear stack on stdcall return)
-				emit #{8D742404}						;-- LEA esi, [esp+4]	; skip last pushed value
-				emit #{56}								;-- PUSH esi			; push arguments list pointer
-				total: length? args/2
-				if args/1 = #typed [total: total / 3]	;-- typed args have 3 components
-				emit-push total							;-- push arguments count
-			]
+			if all [issue? args/1 not cdecl?][emit-variadic-data args]
 			emit #{E8}								;-- CALL NEAR disp
 			emit-reloc-addr spec					;-- 32-bit relative displacement
 		]
-		if fspec/3 = 'cdecl [						;-- in case of non-default calling convention
-			emit-cdecl-pop fspec args
-		]
+		if cdecl? [emit-cdecl-pop fspec args]		;-- in case of non-default calling convention
 	]
 	
 	emit-stack-align: does [
@@ -1727,12 +1873,19 @@ make-profilable make target-class [
 		emit #{89F8}								;-- MOV eax, edi
 	]
 
-	emit-stack-align-prolog: func [args [block!] /local offset][
+	emit-stack-align-prolog: func [args [block!] fspec [block!] /local offset][
 		if compiler/job/stack-align-16? [
 			emit #{89E7}							;-- MOV edi, esp
 			emit #{83E4F0}							;-- AND esp, -16
 			offset: 4								;-- account for saved edi
-			if issue? args/1 [args: args/2]
+			if issue? args/1 [
+				all [
+					args/1 = #variadic
+					fspec/3 <> 'cdecl
+					offset: offset + 12				;-- account for extra variadic slots
+				]
+				args: args/2
+			]
 			offset: offset + call-arguments-size? args
 			
 			unless zero? offset: offset // 16 [
@@ -1784,9 +1937,11 @@ make-profilable make target-class [
 		23											;-- return size of (catch-frame + extra) opcodes
 	]
 	
-	emit-close-catch: func [offset [integer!]][
+	emit-close-catch: func [offset [integer!] global [logic!] callback? [logic!]][
 		if verbose >= 3 [print ">>>emitting CATCH epilog"]
-		offset: offset + 8							;-- account for the 2 catch slots on stack
+		offset: offset + (2 * 8) - args-offset		;-- account for the 2 catch slots + 2 saved slots
+		if callback? [offset: offset + 12]			;-- account for ebx,esi,edi saving slots
+		
 		either offset > 127 [
 			emit #{89EC}							;-- MOV esp, ebp
 			emit #{81EC}							;-- SUB esp, locals-size	; 32-bit

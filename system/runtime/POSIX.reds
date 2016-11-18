@@ -133,9 +133,11 @@ posix-startup-ctx: context [
 			***-dll-entry-point: func [
 				[cdecl]
 			][
-				***-main
-				posix-startup-ctx/init
-				on-load
+				#if red-pass? = no [			;-- only for pure R/S DLLs
+					***-boot-rs
+					on-load
+					***-main
+				]
 			]
 		]
 		exe [

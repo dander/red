@@ -54,21 +54,6 @@ url: context [
 
 	;-- Actions --
 
-	make: func [
-		proto	 [red-value!]
-		spec	 [red-value!]
-		type	 [integer!]
-		return:	 [red-url!]
-		/local
-			url [red-url!]
-	][
-		#if debug? = yes [if verbose > 0 [print-line "url/make"]]
-
-		url: as red-url! string/make proto spec type
-		set-type as red-value! url TYPE_URL
-		url
-	]
-
 	mold: func [
 		url    [red-url!]
 		buffer	[red-string!]
@@ -122,23 +107,27 @@ url: context [
 		return part - ((as-integer tail - head) >> (log-b unit)) - 1
 	]
 
-	to: func [
-		type	[red-datatype!]
-		spec	[red-integer!]
-		return: [red-value!]
+	eval-path: func [
+		parent	[red-string!]							;-- implicit type casting
+		element	[red-value!]
+		value	[red-value!]
+		path	[red-value!]
+		case?	[logic!]
+		return:	[red-value!]
+		/local
+			s	[series!] 
+			new [red-string!]
 	][
-		#if debug? = yes [if verbose > 0 [print-line "url/to"]]
-			
-		switch type/value [
-			TYPE_FILE
-			TYPE_STRING [
-				set-type copy-cell as cell! spec as cell! type type/value
-			]
-			default [
-				fire [TO_ERROR(script bad-to-arg) type spec]
-			]
+		either value <> null [							;-- set-path
+			fire [TO_ERROR(script bad-path-set) path element]
+		][
+			s: GET_BUFFER(parent)
+			new: string/make-at stack/push* 16 + string/rs-length? parent GET_UNIT(s)
+			actions/form element new null 0
+			string/concatenate new parent -1 0 yes yes
+			set-type as red-value! new TYPE_OF(parent)
 		]
-		as red-value! type
+		as red-value! new
 	]
 
 	;-- I/O actions
@@ -159,7 +148,9 @@ url: context [
 		][
 			--NOT_IMPLEMENTED--
 		]
-		simple-io/request-http HTTP_GET as red-url! src null null binary? lines? info?
+		part: simple-io/request-http HTTP_GET as red-url! src null null binary? lines? info?
+		if TYPE_OF(part) = TYPE_NONE [fire [TO_ERROR(access no-connect) src]]
+		part
 	]
 
 	write: func [
@@ -206,7 +197,9 @@ url: context [
 			action: HTTP_POST
 		]
 		
-		simple-io/request-http action as red-url! dest header data binary? lines? info?
+		part: simple-io/request-http action as red-url! dest header data binary? lines? info?
+		if TYPE_OF(part) = TYPE_NONE [fire [TO_ERROR(access no-connect) dest]]
+		part
 	]
 
 	init: does [
@@ -215,13 +208,13 @@ url: context [
 			TYPE_STRING
 			"url!"
 			;-- General actions --
-			:make
+			INHERIT_ACTION	;make
 			null			;random
 			null			;reflect
-			:to
+			INHERIT_ACTION	;to
 			INHERIT_ACTION	;form
 			:mold
-			INHERIT_ACTION	;eval-path
+			:eval-path
 			null			;set-path
 			INHERIT_ACTION	;compare
 			;-- Scalar actions --
@@ -245,7 +238,7 @@ url: context [
 			null			;append
 			INHERIT_ACTION	;at
 			INHERIT_ACTION	;back
-			null			;change
+			INHERIT_ACTION	;change
 			INHERIT_ACTION	;clear
 			INHERIT_ACTION	;copy
 			INHERIT_ACTION	;find
@@ -254,6 +247,7 @@ url: context [
 			INHERIT_ACTION	;index?
 			INHERIT_ACTION	;insert
 			INHERIT_ACTION	;length?
+			INHERIT_ACTION	;move
 			INHERIT_ACTION	;next
 			INHERIT_ACTION	;pick
 			INHERIT_ACTION	;poke

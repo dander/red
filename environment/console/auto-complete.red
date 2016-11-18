@@ -10,7 +10,7 @@ Red [
 	}
 ]
 
-complete-from-path: func [
+red-complete-path: func [
 	str [string!]
 	/local s result word w1 ptr words first? sys-word w
 ][
@@ -56,12 +56,42 @@ complete-from-path: func [
 	result
 ]
 
-default-input-completer: func [
-	str  [string!]
+red-complete-file: func [
+	str [string!]
+	/local file result path word f files replace?
+][
+	result: make block! 4
+	file: to file! next str
+	replace?: no
+
+	either word: find/last/tail str #"/" [
+		path: to file! copy/part next str word
+		unless exists? path [return result]
+		replace?: yes
+	][
+		path: %./
+		word: file
+	]
+
+	files: read path
+	foreach f files [
+		if any [empty? word find/match f word] [
+			append result f
+		]
+	]
+	if 1 = length? result [
+		poke result 1 append copy/part str either replace? [word][1] result/1
+	]
+	result
+]
+
+red-complete-input: func [
+	str		 [string!]
+	console? [logic!]
 	/local word ptr result sys-word delim? len insert? start end delimiters d w
 ][
 	result: make block! 4
-	delimiters: [#" " #"[" #"(" #":" #"'" #"{"]
+	delimiters: [#"^-" #" " #"[" #"(" #":" #"'" #"{"]
 	delim?: no
 	insert?: not tail? str
 	len: (index? str) - 1
@@ -74,24 +104,38 @@ default-input-completer: func [
 	either head? ptr [start: str][start: ptr delim?: yes]
 	word: copy/part start end
 	unless empty? word [
-		either all [
-			#"/" <> word/1
-			ptr: find word #"/"
-			#" " <> pick ptr -1
-		][
-			result: complete-from-path word
-		][
-			foreach w words-of system/words [
-				if value? w [
-					sys-word: mold w
-					if find/match sys-word word [
-						append result sys-word
+		case [
+			all [
+				#"%" = word/1
+				1 < length? word
+			][
+				append result 'file
+				append result red-complete-file word
+			]
+			all [
+				#"/" <> word/1
+				ptr: find word #"/"
+				#" " <> pick ptr -1
+			][
+				append result 'path
+				append result red-complete-path word
+			]
+			true [
+				append result 'word
+				foreach w words-of system/words [
+					if value? w [
+						sys-word: mold w
+						if find/match sys-word word [
+							append result sys-word
+						]
 					]
 				]
+				if ptr: find result word [swap next result ptr]
 			]
 		]
 	]
-	if 1 = length? result [
+	if console? [result: next result]
+	if all [console? 1 = length? result][
 		either word = result/1 [
 			clear result
 		][

@@ -338,15 +338,11 @@ emitter: make-profilable context [
 			]
 			if any [not new-global?	string? value paren? value][
 				if string? value [type: [c-string!]]	;-- force c-string! in case of type casting
-				spec: either compiler/job/PIC? [
-					store-value name value type			;-- store new value in data buffer
-				][
-					store-value/ref name value type refs  ;-- store it with hardcoded pointer address
-				]
+				spec: store-value/ref name value type refs  ;-- store it with hardcoded pointer address
 			]
-			if all [compiler/job/PIC? not libc-init?][
-				target/emit-load-literal-ptr spec/2		;-- load value address
-				if new-global? spec [
+			if all [spec compiler/job/PIC? not libc-init?][
+				target/emit-load-literal-ptr spec/2
+				if new-global? [
 					target/emit-store saved value n-spec ;-- store it in pointer variable
 				]
 			]
@@ -418,7 +414,9 @@ emitter: make-profilable context [
 					target/emit-get-pc
 				]
 				cpu [
-					target/emit-access-register path/3 set? value
+					switch/default path/3 [
+						overflow? [target/emit-get-overflow]
+					][target/emit-access-register path/3 set? value]
 				]
 				fpu [
 					if 2 = length? path [
@@ -501,7 +499,12 @@ emitter: make-profilable context [
 		if all [not with system-path? path value][exit]
 
 		either 2 = length? path [
-			type: first compiler/resolve-type/with path/1 parent
+			type: first either parent [
+				compiler/resolve-type/with path/1 parent
+			][
+				compiler/resolve-type path/1
+			]
+			
 			if all [type = 'struct! parent][
 				parent: resolve-path-head path parent
 			]
@@ -629,8 +632,9 @@ emitter: make-profilable context [
 		target/emit-epilog name locals args-sz locals-sz
 	]
 	
-	import-function: func [name [word!] reloc [block!]][
-		repend symbols [name reduce ['import none reloc]]
+	import: func [name [word!] reloc [block!] /var /local type][
+		type: pick [import-var import] to logic! var
+		repend symbols [name reduce [type none reloc]]
 	]
 	
 	add-native: func [name [word!] /local spec][

@@ -105,10 +105,11 @@ redc: context [
 				win-call/output/show cmd buf			;-- not using /show would freeze CALL
 			]
 			parse/all buf [[thru "[" | thru "Version" | thru "ver" | thru "v" | thru "indows"] to #"." pos:]
-    			win-version: any [
-        			attempt [load copy/part back remove pos 2]
-        			0
-    			]
+			
+			win-version: any [
+				attempt [load copy/part back remove pos 2]
+				0
+			]
 		]
 	]
 
@@ -122,6 +123,14 @@ redc: context [
 				7 ["FreeBSD"]
 			]["MSDOS"]
 		]
+	]
+	
+	get-OS-name: does [
+		switch/default system/version/4 [
+			2 ['MacOSX]
+			3 ['Windows]
+			4 ['Linux]
+		]['Linux]										;-- usage related to lib suffixes
 	]
 
 	fail: func [value] [
@@ -183,6 +192,17 @@ redc: context [
 		]
 		targets
 	]
+	
+	get-output-path: func [opts [object!] /local path][
+		case [
+			opts/build-basename [
+				path: first split-path opts/build-basename
+				either opts/build-prefix [join opts/build-prefix path][path]
+			]
+			opts/build-prefix [opts/build-prefix]
+			'else			  [%""]
+		]
+	]
 
 	red-system?: func [file [file!] /local ws rs?][
 		ws: charset " ^-^/^M"
@@ -208,12 +228,20 @@ redc: context [
 		file
 	]
 
-	add-legacy-flags: func [opts [object!]][
+	add-legacy-flags: func [opts [object!] /local out ver][
 		if all [Windows? win-version <= 60][
 			either opts/legacy [						;-- do not compile gesture support code for XP, Vista, Windows Server 2003/2008(R1)
 				append opts/legacy 'no-touch
 			][
 				opts/legacy: copy [no-touch]
+			]
+		]
+		if system/version/4 = 2 [						;-- macOS version extraction
+			out: make string! 128
+			call/output "sw_vers -productVersion" out
+			attempt [
+				ver: load out
+				opts/OS-version: load rejoin [ver/1 #"." ver/2]
 			]
 		]
 	]
@@ -257,6 +285,7 @@ redc: context [
 				config-name: to word! default-target
 				build-basename: basename
 				build-prefix: temp-dir
+				dev-mode?: no
 			]
 			opts: make opts select load-targets opts/config-name
 			opts/type: 'dll
@@ -324,6 +353,7 @@ redc: context [
 				build-prefix: temp-dir
 				red-help?: yes							;-- include doc-strings
 				gui-console?: gui?
+				dev-mode?: no
 			]
 			opts: make opts select load-targets opts/config-name
 			add-legacy-flags opts
@@ -353,11 +383,110 @@ redc: context [
 		]
 		quit/return 0
 	]
+	
+	build-libRedRT: func [opts [object!] /local script result file path][
+		print "Compiling libRedRT..."
+		file: libRedRT/lib-file
+		path: get-output-path opts
+		
+		opts: make opts [
+			build-prefix: path
+			build-basename: file
+			type: 'dll
+			libRedRT?: yes
+			link?: yes
+			unicode?: yes
+		]
+		if opts/OS <> 'Windows [opts/PIC?: yes]
+		
+		all [
+			not empty? path: opts/build-prefix
+			slash <> first path
+			not encap?
+			opts/build-prefix: head insert copy path %../
+		]
+		
+		script: switch/default opts/OS [	;-- empty script for the lib
+			Windows [ [[Needs: View]] ]
+		][ [[]] ]
+		
+		result: red/compile script opts
+		print [
+			"...compilation time :" format-time result/2 "ms^/"
+			"^/Compiling to native code..."
+		]
+		unless encap? [change-dir %system/]
+		result: system-dialect/compile/options/loaded file opts result
+		unless encap? [change-dir %../]
+		show-stats result
+	]
+	
+	needs-libRedRT?: func [opts [object!] /local file path lib lib? get-date][
+		unless opts/dev-mode? [return no]
+		
+		path: get-output-path opts
+		file: join path %libRedRT
+		libRedRT/root-dir: path
+		
+		lib?: exists? lib: join file switch/default opts/OS [
+			Windows [%.dll]
+			MacOSX	[%.dylib]
+		][%.so]
+		
+		if lib? [
+			either all [load-lib? opts/OS = get-OS-name][
+				lib: load/library lib
+				get-date: make routine! [return: [string!]] lib "red/get-build-date"
+				print ["...using libRedRT built on" get-date]
+				free lib
+			][
+				print ["...using libRedRT for" form opts/OS]
+			]
+		]
+		
+		not all [
+			lib?
+			exists? join path libRedRT/include-file
+			exists? join path libRedRT/defs-file
+		]
+	]
+	
+	show-stats: func [result][
+		print ["...compilation time :" format-time result/1 "ms"]
+		
+		if result/2 [
+			print [
+				"...linking time     :" format-time result/2 "ms^/"
+				"...output file size :" result/3 "bytes^/"
+				"...output file      :" to-local-file result/4 lf
+			]
+		]
+		unless Windows? [print ""]						;-- extra LF for more readable output
+	]
+	
+	do-clear: func [args [block!] /local path file][
+		either empty? args [path: %""][
+			path: either args/1/1 = #"%" [
+				attempt [load args/1]
+			][
+				attempt [to-rebol-file args/1]
+			]
+			unless all [path exists? path][
+				fail "***Clear command error: invalid path"
+			]
+		]
+		foreach ext [%.dll %.dylib %.so][
+			if exists? file: rejoin [path libRedRT/lib-file ext][delete file]
+		]
+		foreach file [include-file defs-file extras-file][
+			if exists? file: join path libRedRT/:file [delete file]
+		]
+	]
 
 	parse-options: func [
 		args [string! none!]
 		/local src opts output target verbose filename config config-name base-path type
-		mode target? gui?
+		mode target? gui? cmd
 	][
 		args: any [
 			all [args parse args none]
@@ -365,20 +494,34 @@ redc: context [
 			parse any [system/script/args ""] none
 		]
 		target: default-target
-		opts: make system-dialect/options-class [link?: yes]
+		opts: make system-dialect/options-class [
+			link?: yes
+			libRedRT-update?: no
+		]
 		gui?: Windows?									;-- use GUI console by default on Windows
+
+		unless empty? args [
+			if cmd: select [
+				"clear" do-clear
+			] first args [
+				return reduce [none reduce [cmd next args]]
+			]
+		]
 
 		parse/case args [
 			any [
 				  ["-c"	| "--compile"]		(type: 'exe)
-				| ["-r" | "--no-runtime"]   (opts/runtime?: no)		;@@ overridable by config!
+				| ["-r" | "--release"]		(opts/dev-mode?: no)
 				| ["-d" | "--debug" | "--debug-stabs"]	(opts/debug?: yes)
 				| ["-o" | "--output"]  		set output skip
 				| ["-t" | "--target"]  		set target skip (target?: yes)
 				| ["-v" | "--verbose"] 		set verbose skip	;-- 1-3: Red, >3: Red/System
 				| ["-h" | "--help"]			(mode: 'help)
 				| ["-V" | "--version"]		(mode: 'version)
+				| ["-u"	| "--update-libRedRT"] (opts/libRedRT-update?: yes)
 				| "--red-only"				(opts/red-only?: yes)
+				| "--dev"					(opts/dev-mode?: yes)
+				| "--no-runtime"			(opts/runtime?: no)		;@@ overridable by config!
 				| "--cli"					(gui?: no)
 				| "--catch"								;-- just pass-thru
 				| ["-dlib" | "--dynamic-lib"] (type: 'dll)
@@ -464,37 +607,22 @@ redc: context [
 			src: clean-path join base-path src			;-- add working dir path
 		]
 		unless exists? src [
-			fail ["Cannot access source file:" src]
+			fail ["Cannot access source file:" to-local-file src]
 		]
 
 		add-legacy-flags opts
 
 		reduce [src opts]
 	]
+	
+	compile: func [src opts /local result saved rs?][
+		print [	"Compiling" to-local-file src "..."]
 
-	main: func [/with cmd [string!] /local src opts build-dir result saved rs? prefix] [
-		set [src opts] parse-options cmd
-
-		rs?: red-system? src
-
-		;; If we use a build directory, ensure it exists.
-		if all [prefix: opts/build-prefix find prefix %/] [
-			build-dir: copy/part prefix find/last prefix %/
-			unless attempt [make-dir/deep build-dir] [
-				fail ["Cannot access build dir:" build-dir]
-			]
-		]
-
-		print [
-			newline
-			"-=== Red Compiler" read-cache %version.r "===-" newline newline
-			"Compiling" src "..."
-		]
-
-		unless rs? [
+		unless rs?: red-system? src [
 	;--- 1st pass: Red compiler ---
 			if load-lib? [build-compress-lib]
-
+			if needs-libRedRT? opts [build-libRedRT opts]
+			
 			fail-try "Red Compiler" [
 				result: red/compile src opts
 			]
@@ -506,6 +634,7 @@ redc: context [
 
 		print [
 			newline
+			"Target:" opts/config-name lf lf
 			"Compiling to native code..."
 		]
 		fail-try "Red/System Compiler" [
@@ -519,16 +648,36 @@ redc: context [
 			]
 			unless encap? [change-dir %../]
 		]
-		print ["...compilation time :" format-time result/1 "ms"]
+		result
+	]
 
-		if result/2 [
-			print [
-				"...linking time     :" format-time result/2 "ms^/"
-				"...output file size :" result/3 "bytes^/"
-				"...output file      :" to-local-file result/4 lf
+	main: func [/with cmd [string!] /local src opts build-dir prefix result][
+		set [src opts] parse-options cmd
+		unless src [do opts exit]						;-- run named command and terminates
+
+		rs?: red-system? src
+
+		;-- If we use a build directory, ensure it exists.
+		if all [prefix: opts/build-prefix find prefix %/] [
+			build-dir: copy/part prefix find/last prefix %/
+			unless attempt [make-dir/deep build-dir] [
+				fail ["Cannot access build dir:" to-local-file build-dir]
 			]
 		]
-		unless Windows? [print ""]						;-- extra LF for more readable output
+		
+		print [lf "-=== Red Compiler" read-cache %version.r "===-" lf]
+
+		;-- libRedRT updating mode
+		if opts/libRedRT-update? [
+			opts/dev-mode?: opts/link?: no
+			compile src opts
+			print ["libRedRT-extras.r file generated, recompiling..." lf]
+			opts/dev-mode?: opts/link?: yes
+			opts/libRedRT-update?: no
+		]
+		
+		result: compile src opts
+		show-stats result
 	]
 
 	set 'rc func [cmd [file! string! block!]][

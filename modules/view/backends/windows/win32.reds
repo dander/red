@@ -10,6 +10,10 @@ Red/System [
 	}
 ]
 
+#if dev-mode? = yes [
+	#include %../../../../runtime/platform/COM.reds
+	#include %../../../../runtime/platform/image-gdiplus.reds
+]
 
 #define NM_CUSTOMDRAW			-12
 
@@ -35,16 +39,23 @@ Red/System [
 
 #define GW_OWNER				4
 
+#define CWP_SKIPINVISIBLE		1
+#define CWP_SKIPTRANSPARENT		4
+
 ;-- DrawText() Format Flags
 
 #define DT_CENTER				0001h
 #define DT_VCENTER				0004h
 #define DT_SINGLELINE			0020h
+#define DT_EXPANDTABS			0040h
+#define DT_CALCRECT				0400h
 
 #define TBM_GETPOS			0400h
 #define TBM_SETPOS			0405h
 #define TBM_SETRANGE		0406h
+#define TBM_SETRANGEMAX		0408h
 
+#define PBM_SETRANGE		0401h
 #define PBM_SETPOS			0402h
 
 #define TPM_RETURNCMD		0100h
@@ -282,6 +293,7 @@ Red/System [
 #define WM_ENTERMENULOOP	0211h
 #define WM_SIZING			0214h
 #define WM_MOVING			0216h
+#define WM_ENTERSIZEMOVE	0231h
 #define WM_EXITSIZEMOVE		0232h
 #define WM_COPY				0301h
 #define WM_PASTE			0302h
@@ -383,6 +395,7 @@ Red/System [
 #define BK_OPAQUE			2
 
 #define NULL_BRUSH          5
+#define NULL_PEN			8
 #define DC_BRUSH			18
 #define DC_PEN              19
 
@@ -430,6 +443,14 @@ Red/System [
 #define GDIPLUS_UNIT_INCH			4
 #define GDIPLUS_FILLMODE_ALTERNATE	0
 #define GDIPLUS_FILLMODE_WINDING	1
+
+#define GDIPLUS_MATRIXORDERPREPEND	0
+#define GDIPLUS_MATRIXORDERAPPEND	1
+
+#define GDIPLUS_COMBINEMODEREPLACE	0
+
+#define AC_SRC_OVER                 0
+#define AC_SRC_ALPHA                0			;-- there are some troubles on Win64 with value 1
 
 #define TextRenderingHintSystemDefault		0
 #define TextRenderingHintAntiAliasGridFit	3
@@ -479,6 +500,18 @@ Red/System [
 #define CF_UNICODETEXT		13
 #define GA_ROOT				2
 
+#define GM_COMPATIBLE       1
+#define GM_ADVANCED         2
+
+#define MWT_IDENTITY        1
+#define MWT_LEFTMULTIPLY    2
+#define MWT_RIGHTMULTIPLY   3
+
+#define AD_COUNTERCLOCKWISE 1
+#define AD_CLOCKWISE        2
+
+#define RGN_COPY            5
+
 BUTTON_IMAGELIST: alias struct! [
 	handle		[integer!]
 	left		[integer!]
@@ -501,6 +534,11 @@ tagWINDOWPOS: alias struct! [
 tagPOINT: alias struct! [
 	x		[integer!]
 	y		[integer!]	
+]
+
+POINT_2F: alias struct! [
+	x		[float32!]
+	y		[float32!]
 ]
 
 tagSIZE: alias struct! [
@@ -797,9 +835,91 @@ RECT_STRUCT_FLOAT32: alias struct! [
 	height		[float32!]
 ]
 
+tagLOGFONT: alias struct! [								;-- 92 bytes
+	lfHeight		[integer!]
+	lfWidth			[integer!]
+	lfEscapement	[integer!]
+	lfOrientation	[integer!]
+	lfWeight		[integer!]
+	lfItalic		[byte!]
+	lfUnderline		[byte!]
+	lfStrikeOut		[byte!]
+	lfCharSet		[byte!]
+	lfOutPrecision	[byte!]
+	lfClipPrecision	[byte!]
+	lfQuality		[byte!]
+	lfPitchAndFamily[byte!]
+	lfFaceName		[integer!]							;@@ 64 bytes offset: 28
+]
+
+tagCHOOSEFONT: alias struct! [
+	lStructSize		[integer!]
+	hwndOwner		[int-ptr!]
+	hDC				[integer!]
+	lpLogFont		[tagLOGFONT]
+	iPointSize		[integer!]
+	Flags			[integer!]
+	rgbColors		[integer!]
+	lCustData		[integer!]
+	lpfnHook		[integer!]
+	lpTemplateName	[c-string!]
+	hInstance		[integer!]
+	lpszStyle		[c-string!]
+	nFontType		[integer!]							;-- WORD
+	nSizeMin		[integer!]
+	nSizeMax		[integer!]
+]
+
+tagOFNW: alias struct! [
+	lStructSize			[integer!]
+	hwndOwner			[handle!]
+	hInstance			[integer!]
+	lpstrFilter			[c-string!]
+	lpstrCustomFilter	[c-string!]
+	nMaxCustFilter		[integer!]
+	nFilterIndex		[integer!]
+	lpstrFile			[byte-ptr!]
+	nMaxFile			[integer!]
+	lpstrFileTitle		[c-string!]
+	nMaxFileTitle		[integer!]
+	lpstrInitialDir		[c-string!]
+	lpstrTitle			[c-string!]
+	Flags				[integer!]
+	nFileOffset			[integer!]
+	;nFileExtension		[integer!]
+	lpstrDefExt			[c-string!]
+	lCustData			[integer!]
+	lpfnHook			[integer!]
+	lpTemplateName		[integer!]
+	;-- if (_WIN32_WINNT >= 0x0500)
+	pvReserved			[integer!]
+	dwReserved			[integer!]
+	FlagsEx				[integer!]
+]
+
+tagBROWSEINFO: alias struct! [
+	hwndOwner		[handle!]
+	pidlRoot		[int-ptr!]
+	pszDisplayName	[c-string!]
+	lpszTitle		[c-string!]
+	ulFlags			[integer!]
+	lpfn			[integer!]
+	lParam			[integer!]
+	iImage			[integer!]
+]
+
 DwmIsCompositionEnabled!: alias function! [
 	pfEnabled	[int-ptr!]
 	return:		[integer!]
+]
+
+XFORM!: alias struct! [
+    eM11        [float32!]
+    eM12        [float32!]
+    eM21        [float32!]
+    eM22        [float32!]
+    eDx         [float32!]
+    eDy         [float32!]
 ]
 
 #import [
@@ -859,8 +979,22 @@ DwmIsCompositionEnabled!: alias function! [
 			lpProcName	[c-string!]
 			return:		[integer!]
 		]
+		lstrlen: "lstrlenW" [
+			str			[byte-ptr!]
+			return:		[integer!]
+		]
 	]
 	"User32.dll" stdcall [
+		SystemParametersInfo: "SystemParametersInfoW" [
+			action		[integer!]
+			iParam		[integer!]
+			vParam		[int-ptr!]
+			winini		[integer!]
+			return:		[logic!]
+		]
+		GetForegroundWindow: "GetForegroundWindow" [
+			return:		[handle!]
+		]
 		IsWindowVisible: "IsWindowVisible" [
 			hWnd		[handle!]
 			return:		[logic!]
@@ -1053,6 +1187,12 @@ DwmIsCompositionEnabled!: alias function! [
 			lpsi		[tagSCROLLINFO]
 			return:		[integer!]
 		]
+		ShowScrollBar: "ShowScrollBar" [
+			hWnd		[handle!]
+			wBar		[integer!]
+			bShow		[logic!]
+			return:		[logic!]
+		]
 		ShowWindow: "ShowWindow" [
 			hWnd		[handle!]
 			nCmdShow	[integer!]
@@ -1096,6 +1236,13 @@ DwmIsCompositionEnabled!: alias function! [
 			hwndParent	[handle!]
 			x			[integer!]
 			y			[integer!]
+			return:		[handle!]
+		]
+		ChildWindowFromPointEx: "ChildWindowFromPointEx" [
+			hwndParent	[handle!]
+			x			[integer!]
+			y			[integer!]
+			flags		[integer!]
 			return:		[handle!]
 		]
 		DefWindowProc: "DefWindowProcW" [
@@ -1356,6 +1503,12 @@ DwmIsCompositionEnabled!: alias function! [
 		]
 	]
 	"gdi32.dll" stdcall [
+		GetTextFace: 	"GetTextFaceW" [
+			hdc			[handle!]
+			nCount		[integer!]
+			lpFaceName	[byte-ptr!]
+			return:		[integer!]
+		]
 		GetCharWidth32: "GetCharWidth32W" [
 			hdc			[handle!]
 			iFirst		[integer!]
@@ -1392,6 +1545,16 @@ DwmIsCompositionEnabled!: alias function! [
 			len			[integer!]
 			lpSize		[tagSIZE]
 			return:		[integer!]
+		]
+		GetTextExtentExPoint: "GetTextExtentExPointW" [
+			hdc			[handle!]
+			lpString	[c-string!]
+			len			[integer!]
+			extent		[integer!]
+			lpnFit		[int-ptr!]
+			alpDx		[int-ptr!]
+			lpSize		[tagSIZE]
+			return:		[logic!]
 		]
 		CreateCompatibleDC: "CreateCompatibleDC" [
 			hDC			[handle!]
@@ -1526,12 +1689,53 @@ DwmIsCompositionEnabled!: alias function! [
 			nHeight		[integer!]
 			return:		[logic!]
 		]
+        SelectClipPath: "SelectClipPath" [
+            hdc         [handle!]
+            iMode       [integer!]
+            return:     [logic!]
+        ]
+        BeginPath: "BeginPath" [
+            hdc         [handle!]
+            return:     [logic!]
+        ]
+        EndPath: "EndPath" [
+            hdc         [handle!]
+            return:     [logic!]
+        ]
+        GetPath: "GetPath" [
+            hdc         [handle!]
+            points      [tagPOINT]
+            types       [byte-ptr!]
+            nSize       [integer!]
+            return:     [integer!]
+        ]
+        FillPath: "FillPath" [
+            hdc         [handle!]
+            return:     [logic!]
+        ]
+        CloseFigure: "CloseFigure" [
+            hdc         [handle!]
+            return:     [logic!]
+        ]
 		Polyline: "Polyline" [
 			hdc			[handle!]
 			lppt		[tagPOINT]
 			cPoints		[integer!]
 			return:		[logic!]
 		]
+        PolylineTo: "PolylineTo" [
+            hdc         [handle!]
+            lppt        [tagPOINT]
+            cPoints     [integer!]
+            return:     [logic!]
+        ]
+        PolyDraw: "PolyDraw" [
+            hdc         [handle!]
+            points      [tagPOINT]
+            types       [byte-ptr!]
+            nSize       [integer!]
+            return:     [logic!]
+        ]
 		Polygon: "Polygon" [
 			hdc			[handle!]
 			lppt		[tagPOINT]
@@ -1558,6 +1762,18 @@ DwmIsCompositionEnabled!: alias function! [
 			nYEndArc	[integer!]
 			return:		[logic!]
 		]
+        ArcTo: "ArcTo" [
+            hdc         [handle!]
+            nLeftRect   [integer!]
+            nTopRect    [integer!]
+            nRightRect  [integer!]
+            nBottomRect [integer!]
+            nXStartArc  [integer!]
+            nYStartArc  [integer!]
+            nXEndArc    [integer!]
+            nYEndArc    [integer!]
+            return:     [logic!]
+        ]
 		Chord: "Chord" [
 			hdc			[handle!]
 			nLeftRect	[integer!]
@@ -1587,11 +1803,19 @@ DwmIsCompositionEnabled!: alias function! [
 			direction	[integer!]
 			return:		[integer!]
 		]
+        GetArcDirection: "GetArcDirection" [
+            hdc         [handle!]
+            return:     [integer!]
+        ]
 		PolyBezier: "PolyBezier" [
 			hdc			[handle!]
 			lppt		[tagPOINT]
 			cPoints		[integer!]
 			return:		[integer!]
+		]
+		CreateFontIndirect: "CreateFontIndirectW" [
+			lplf		[tagLOGFONT]
+			return:		[handle!]
 		]
 		CreateFont: "CreateFontW" [
 			nHeight				[integer!]
@@ -1610,8 +1834,278 @@ DwmIsCompositionEnabled!: alias function! [
 			lpszFace			[c-string!]
 			return: 			[handle!]
 		]
+        SetGraphicsMode: "SetGraphicsMode" [
+            hdc         [handle!]
+            mode        [integer!]
+            return:     [integer!]
+        ]
+        SetWorldTransform: "SetWorldTransform" [
+            hdc         [handle!]
+            lpXform     [XFORM!]
+            return:     [logic!]
+        ]
+        ModifyWorldTransform: "ModifyWorldTransform" [
+            hdc         [handle!]
+            lpXform     [XFORM!]
+            iMode       [integer!]
+            return:     [logic!]
+        ]
+	]
+	"comdlg32.dll" stdcall [
+			GetOpenFileName: "GetOpenFileNameW" [
+				lpofn		[tagOFNW]
+				return:		[integer!]
+			]
+			GetSaveFileName: "GetSaveFileNameW" [
+				lpofn		[tagOFNW]
+				return:		[integer!]
+			]
+		ChooseFont: "ChooseFontW" [
+			lpcf		[tagCHOOSEFONT]
+			return:		[logic!]
+		]
 	]
 	"gdiplus.dll" stdcall [
+		GdipCreateImageAttributes: "GdipCreateImageAttributes" [
+			attr		[int-ptr!]
+			return:		[integer!]
+		]
+		GdipDisposeImageAttributes: "GdipDisposeImageAttributes" [
+			attr		[integer!]
+			return:		[integer!]
+		]
+		GdipSetImageAttributesColorKeys: "GdipSetImageAttributesColorKeys" [
+			attr		[integer!]
+			type		[integer!]
+			enable?		[logic!]
+			colorLow	[integer!]
+			colorHigh	[integer!]
+			return:		[integer!]
+		]
+		GdipCreateMatrix: "GdipCreateMatrix" [
+			matrix		[int-ptr!]
+			return:		[integer!]
+		]
+		GdipDeleteMatrix: "GdipDeleteMatrix" [
+			matrix		[integer!]
+			return:		[integer!]
+		]
+		GdipRotateMatrix: "GdipRotateMatrix" [
+			matrix		[integer!]
+			angle		[float32!]
+			matrixorder [integer!]
+			return:		[integer!]
+		]
+		GdipTranslateMatrix: "GdipTranslateMatrix" [
+			matrix		[integer!]
+			dx			[float32!]
+			dy			[float32!]
+			matrixorder	[integer!]
+			return:		[integer!]
+		]
+		GdipScaleMatrix: "GdipScaleMatrix" [
+			matrix		[integer!]
+			sx			[float32!]
+			sy			[float32!]
+			matrixorder	[integer!]
+			return:		[integer!]
+		]
+		GdipInvertMatrix: "GdipInvertMatrix" [
+			matrix		[integer!]
+		]
+		GdipCreateMatrix2: "GdipCreateMatrix2" [
+			m11			[float32!]
+			m12			[float32!]
+			m21			[float32!]
+			m22			[float32!]
+			dx			[float32!]
+			dy			[float32!]
+			matrix		[int-ptr!]
+			return:		[int-ptr!]
+		]
+		GdipTransformMatrixPointsI: "GdipTransformMatrixPointsI" [
+			matrix		[integer!]
+			pts			[tagPOINT]
+			count		[integer!]
+			return:		[integer!]
+		]
+		GdipSaveGraphics: "GdipSaveGraphics" [
+			graphics	[integer!]
+			state		[int-ptr!]
+			return:		[integer!]
+		]
+		GdipRestoreGraphics: "GdipRestoreGraphics" [
+			graphics	[integer!]
+			state		[integer!]
+			return:		[integer!]
+		]
+		GdipSetClipRectI: "GdipSetClipRectI" [
+			graphics	[integer!]
+			x			[integer!]
+			y			[integer!]
+			width 		[integer!]
+			height 		[integer!]
+			combine 	[integer!]
+			return:		[integer!]
+		]
+        GdipSetClipPath: "GdipSetClipPath" [
+			graphics	[integer!]
+			path		[integer!]
+            combineMode [integer!]
+            return:     [integer!]
+        ]
+		GdipRotateWorldTransform: "GdipRotateWorldTransform" [
+			graphics	[integer!]
+			angle		[float32!]
+			matrixorder [integer!]
+			return:		[integer!]
+		]
+		GdipTranslateWorldTransform: "GdipTranslateWorldTransform" [
+			graphics	[integer!]
+			dx			[float32!]
+			dy			[float32!]
+			matrixorder	[integer!]
+			return:		[integer!]
+		]
+		GdipScaleWorldTransform: "GdipScaleWorldTransform" [
+			graphics	[integer!]
+			sx			[float32!]
+			sy			[float32!]
+			matrixorder	[integer!]
+			return:		[integer!]
+		]
+		GdipMultiplyWorldTransform: "GdipMultiplyWorldTransform" [
+			graphics	[integer!]
+			matrix		[integer!]
+			matrixorder	[integer!]
+			return:		[integer!]
+		]
+		GdipSetWorldTransform: "GdipSetWorldTransform" [
+			graphics	[integer!]
+			matrix		[integer!]
+			return:		[integer!]
+		]
+		GdipGetWorldTransform: "GdipGetWorldTransform" [
+			graphics	[integer!]
+			matrix		[integer!]
+			return:		[integer!]
+		]
+		GdipResetWorldTransform: "GdipResetWorldTransform" [
+			graphics	[integer!]
+			return:		[integer!]
+		]
+		GdipTransformPath: "GdipTransformPath" [
+			path		[integer!]
+			matrix		[integer!]
+			return:		[integer!]
+		]
+		GdipTranslatePathGradientTransform: "GdipTranslatePathGradientTransform" [
+			matrix		[integer!]
+			dx			[float32!]
+			dy			[float32!]
+			matrixorder	[integer!]
+			return:		[integer!]
+		]
+		GdipSetPathGradientWrapMode: "GdipSetPathGradientWrapMode" [
+			brush		[integer!]
+			wrapmode	[integer!]
+			return:		[integer!]
+		]
+		GdipCreatePathGradientFromPath: "GdipCreatePathGradientFromPath" [
+			path		[integer!]
+			brush		[int-ptr!]
+			return:		[integer!]
+		]
+		GdipCreatePathGradientI: "GdipCreatePathGradientI" [
+			points		[tagPOINT]
+			count		[integer!]
+			wrapmode	[integer!]
+			brush		[int-ptr!]
+			return:		[integer!]
+		]
+		GdipSetPathGradientCenterColor: "GdipSetPathGradientCenterColor" [
+			brush		[integer!]
+			color		[integer!]
+			return:		[integer!]
+		]
+		GdipSetPathGradientSurroundColorsWithCount: "GdipSetPathGradientSurroundColorsWithCount" [
+			brush		[integer!]
+			colors		[int-ptr!]
+			count		[int-ptr!]
+			return:		[integer!]
+		]
+		GdipSetPathGradientPath: "GdipSetPathGradientPath" [
+			brush		[integer!]
+			path		[integer!]
+			return:		[integer!]
+		]
+		GdipSetPathGradientCenterPointI: "GdipSetPathGradientCenterPointI" [
+			brush		[integer!]
+			point		[tagPOINT]
+			return:		[integer!]
+		]
+		GdipGetPathGradientCenterPointI: "GdipGetPathGradientCenterPointI" [
+			brush		[integer!]
+			point		[tagPOINT]
+			return:		[integer!]
+		]
+		GdipSetPathGradientPresetBlend: "GdipSetPathGradientPresetBlend" [
+			brush		[integer!]
+			colors		[int-ptr!]
+			positions	[pointer! [float32!]]
+			count		[integer!]
+			return:		[integer!]
+		]
+		GdipScaleLineTransform: "GdipScaleLineTransform" [
+			brush		[integer!]
+			sx			[float32!]
+			sy			[float32!]
+			matrixorder	[integer!]
+			return:		[integer!]
+		]
+		GdipRotateLineTransform: "GdipRotateLineTransform" [
+			brush		[integer!]
+			angle		[float32!]
+			matrixorder	[integer!]
+			return:		[integer!]
+		]
+		GdipCreateTexture: "GdipCreateTexture" [
+			image		[integer!]
+			wrapmode	[integer!]
+			texture		[int-ptr!]
+			return:		[integer!]
+		]
+		GdipDrawImagePointsRectI: "GdipDrawImagePointsRectI" [
+			graphics	[integer!]
+			image		[integer!]
+			points		[tagPOINT]
+			count		[integer!]
+			srcx		[integer!]
+			srcy		[integer!]
+			srcwidth	[integer!]
+			srcheight	[integer!]
+			srcUnit		[integer!]
+			attribute	[integer!]
+			callback	[integer!]
+			data		[integer!]
+			return:		[integer!]
+		]
+		GdipSetLinePresetBlend: "GdipSetLinePresetBlend" [
+			brush		[integer!]
+			colors		[int-ptr!]
+			positions	[pointer! [float32!]]
+			count		[integer!]
+			return:		[integer!]
+		]
+		GdipCreateLineBrushI: "GdipCreateLineBrushI" [
+			pt1			[tagPOINT]
+			pt2			[tagPOINT]
+			color1		[integer!]
+			color2		[integer!]
+			wrap		[integer!]
+			brush		[int-ptr!]
+			return:		[integer!]
+		]
 		GdipDeleteStringFormat: "GdipDeleteStringFormat" [
 			format		[integer!]
 			return:		[integer!]
@@ -1791,6 +2285,28 @@ DwmIsCompositionEnabled!: alias function! [
 			path		[integer!]
 			return:		[integer!]
 		]
+        GdipAddPathLine2I: "GdipAddPathLine2I" [
+            path        [integer!]
+            points      [tagPOINT]
+            count       [integer!]
+            return:     [integer!]
+        ]
+		GdipAddPathRectangleI: "GdipAddPathRectangleI" [
+			path		[integer!]
+			x			[integer!]
+			y			[integer!]
+			width		[integer!]
+			height		[integer!]
+			return:		[integer!]
+		]
+		GdipAddPathEllipseI: "GdipAddPathEllipseI" [
+			path		[integer!]
+			x			[integer!]
+			y			[integer!]
+			width		[integer!]
+			height		[integer!]
+			return:		[integer!]
+		]
 		GdipAddPathArcI: "GdipAddPathArcI" [
 			path		[integer!]
 			x			[integer!]
@@ -1801,6 +2317,37 @@ DwmIsCompositionEnabled!: alias function! [
 			sweepAngle	[float32!]
 			return:		[integer!]
 		]
+		GdipAddPathArc: "GdipAddPathArc" [
+			path		[integer!]
+			x			[float32!]
+			y			[float32!]
+			width		[float32!]
+			height		[float32!]
+			startAngle	[float32!]
+			sweepAngle	[float32!]
+			return:		[integer!]
+		]
+        GdipAddPathBeziersI: "GdipAddPathBeziersI" [
+            path        [integer!]
+            points      [tagPOINT]
+            count       [integer!]
+            return:     [integer!]
+        ]
+        GdipAddPathPath: "GdipAddPathPath" [
+            path-dst    [integer!]
+            path-src    [integer!]
+            connect     [integer!]
+            return:     [integer!]
+        ]
+        GdipGetPointCount: "GdipGetPointCount" [
+            path        [integer!]
+            count       [int-ptr!]
+            return:     [integer!]
+        ]
+        GdipGetPathLastPoint: "GdipGetPathLastPoint" [
+            path        [integer!]
+            point       [POINT_2F]
+        ]
 		GdipDrawArcI: "GdipDrawArcI" [
 			graphics	[integer!]
 			pen			[integer!]
@@ -1888,6 +2435,21 @@ DwmIsCompositionEnabled!: alias function! [
 			style		[integer!]
 			return:		[integer!]
 		]
+		GdipSetPenColor: "GdipSetPenColor" [
+			pen			[integer!]
+			color		[integer!]
+			return:		[integer!]
+		]
+		GdipSetPenWidth: "GdipSetPenWidth" [
+			pen			[integer!]
+			width		[float32!]
+			return:		[integer!]
+		]
+		GdipSetPenBrushFill: "GdipSetPenBrushFill" [
+			pen			[integer!]
+			brush		[integer!]
+			return:		[integer!]
+		]
 		GdipDrawImageRectRectI: "GdipDrawImageRectRectI" [
 			graphics	[integer!]
 			image		[integer!]
@@ -1965,6 +2527,42 @@ DwmIsCompositionEnabled!: alias function! [
 			return:		[integer!]
 		]
 	]
+	"shell32.dll" stdcall [
+		SHBrowseForFolder: "SHBrowseForFolderW" [
+			lpbi		[tagBROWSEINFO]
+			return: 	[integer!]
+		]
+		SHGetPathFromIDList: "SHGetPathFromIDListW" [
+			pidl		[integer!]
+			pszPath		[byte-ptr!]
+			return:		[logic!]
+		]
+	]
+	"ole32.dll" stdcall [
+		CoTaskMemFree: "CoTaskMemFree" [
+			pv		[integer!]
+		]
+	]
+	"UxTheme.dll" stdcall [
+		OpenThemeData: "OpenThemeData" [
+			hWnd		 [handle!]
+			pszClassList [c-string!]
+			return:		 [handle!]
+		]
+		CloseThemeData: "CloseThemeData" [
+			hTheme		[handle!]
+			return:		[integer!]
+		]
+		IsThemeActive:	"IsThemeActive" [				;WARN: do not call from DllMain!!
+			return:		[logic!]
+		]
+		GetThemeSysFont: "GetThemeSysFont" [
+			hTheme		[handle!]
+			iFontID		[integer!]
+			plf			[tagLOGFONT]
+			return:		[integer!]
+		]
+	]
 ]
 
 
@@ -1988,4 +2586,21 @@ DwmIsCompositionEnabled!: alias function! [
 			]
 		]
 	]
+]
+
+zero-memory: func [
+	dest	[byte-ptr!]
+	size	[integer!]
+][
+	loop size [dest/value: #"^@" dest: dest + 1]
+]
+
+utf16-length?: func [
+	s 		[c-string!]
+	return: [integer!]
+	/local base
+][
+	base: s
+	while [any [s/1 <> null-byte s/2 <> null-byte]][s: s + 2]
+	(as-integer s - base) >>> 1							;-- do not count the terminal zero
 ]
