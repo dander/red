@@ -9,10 +9,18 @@ environment:
 install:
 - ps: >-
     Write-Output "test"
+    
     Write-Host $PSVersionTable
-    Write-Host Get-Command choco
+    
+    Get-Command choco
+    
+    choco
+    
     Get-ChildItem env:my_variable
-    $(gci env:my_variable).Value.length
+    
+    $env:my_variable
+    
+    gci env:
     
     ## Download Rebol v276
 
