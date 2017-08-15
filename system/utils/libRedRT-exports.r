@@ -14,6 +14,7 @@
 	red/eval-path
 	red/select-key*
 	red/alloc-bytes
+	red/get-cmdline-args
 
 	red/redbin/boot-load
 
@@ -60,6 +61,7 @@
 	red/block/push
 	red/char/push
 	red/datatype/push
+	red/date/push
 	;red/event/push
 	red/email/push
 	red/file/push
@@ -107,6 +109,7 @@
 	red/word/get-any
 	red/word/get-in
 	red/word/set-in
+	red/word/set-in-ctx
 	red/word/set
 	red/word/replace
 	red/word/from
@@ -126,6 +129,7 @@
 	red/object/init-events
 	red/object/loc-fire-on-set*
 	red/object/fire-on-set*
+	red/object/get-values
 
 	red/integer/get-any*
 	red/integer/get*
@@ -173,11 +177,14 @@
 
 	red/natives/repeat-init*
 	red/natives/repeat-set
+	red/natives/remove-each-init
+	red/natives/remove-each-next
 	red/natives/foreach-next-block
 	red/natives/foreach-next
 	red/natives/forall-loop
 	red/natives/forall-next
 	red/natives/forall-end
+	red/natives/forall-end-adjust
 
 	red/actions/make*
 	red/actions/random*
@@ -232,6 +239,7 @@
 	red/actions/modify*
 	red/actions/read*
 	red/actions/write*
+	red/actions/delete*
 
 	red/natives/if*
 	red/natives/unless*
@@ -318,6 +326,16 @@
 	red/natives/unset*
 	red/natives/handle-thrown-error
 	red/natives/now*
+	red/natives/get-env*
+	red/natives/set-env*
+	red/natives/list-env*
+	red/natives/sign?*
+	red/natives/as*
+	red/natives/call*
+	red/natives/zero?*
+	red/natives/size?*
+	red/natives/browse*
+	red/natives/context?*
 ][
 	red/stack/arguments		cell!
 	red/stack/top			cell!

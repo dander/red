@@ -13,11 +13,15 @@ Red/System [
 dos-console?:	yes
 buffer:			as byte-ptr! 0
 pbuffer:		as byte-ptr! 0
+cbuffer:		as byte-ptr! 0
+
+#include %win32-ansi.reds
 
 ;-------------------------------------------
 ;-- check whether we are in console mode
 ;-------------------------------------------
 init-dos-console: func [/local n [integer!]][
+	cbuffer:		allocate 128
 	buffer:			allocate 1024
 	pbuffer:		buffer ;this stores buffer's head position
 	n: 0
@@ -69,18 +73,57 @@ print-screen: func [
 	lf?		[logic!]
 	/local
 		chars [integer!]
+		skip  [integer!]
 ][
 	chars: 0
-	while [size > 0][
-		buffer/1: str/1
-		buffer/2: either unit = Latin1 [null-byte][str/2]
-		chars: chars + 1
-		buffer: buffer + 2
-		str: str + unit
-		size: size - unit
-		if chars = 510 [
-			putbuffer chars
-			chars: 0
+	skip: 0
+	either unit = Latin1 [
+		while [size > 0][
+			if str/1 = #"^[" [
+				putbuffer chars
+				chars: 0
+				skip: parse-ansi-sequence str Latin1
+			]
+			either skip = 0 [
+				buffer/1: str/1
+				buffer/2: null-byte ;this should be always 0 in Latin1
+				str: str + 1
+				size: size - 1
+				chars: chars + 1
+				buffer: buffer + 2
+				if chars = 510 [  ; if the buffer has 1024 bytes, it has room for 512 chars
+					putbuffer chars
+					chars: 0
+				]
+			][
+				str: str + skip
+				size: size - skip
+				skip: 0
+			]
+		]
+	][ ;UCS2 Version
+		while [size > 0][
+			if all [str/1 = #"^[" str/2 = null-byte] [
+				putbuffer chars
+				chars: 0
+				skip: parse-ansi-sequence str UCS-2
+			]
+			either skip = 0 [
+				buffer/1: str/1
+				buffer/2: str/2
+				chars: chars + 1
+				buffer: buffer + 2
+				str: str + 2
+				size: size - 2
+				if chars = 510 [  ; if the buffer has 1024 bytes, it has room for 512 chars
+					putbuffer chars
+					chars: 0
+				]
+			][
+				str: str + skip
+				size: size - skip
+				skip: 0
+			]
 		]
 	]
 	if lf? [
@@ -140,6 +183,10 @@ print-str: func [
 	][
 		print-file str size unit lf?
 	]
+]
+
+wflush: func [len [integer!]][
+	print-str cbuffer len * 2 UCS-2 no
 ]
 
 ;-------------------------------------------
@@ -253,31 +300,26 @@ prin*: func [s [c-string!] return: [c-string!] /local p n][
 ]
 
 prin-int*: func [i [integer!] return: [integer!]][
-	wprintf [#u16 "%i" i]
-	fflush null										;-- flush all streams
+	wflush swprintf [cbuffer #u16 "%i" i]
 	i
 ]
 
 prin-2hex*: func [i [integer!] return: [integer!]][
-	wprintf [#u16 "%02X" i]
-	fflush null
+	wflush swprintf [cbuffer #u16 "%02X" i]
 	i
 ]
 
 prin-hex*: func [i [integer!] return: [integer!]][
-	wprintf [#u16 "%08X" i]
-	fflush null
+	wflush swprintf [cbuffer #u16 "%08X" i]
 	i
 ]
 
 prin-float*: func [f [float!] return: [float!]][
-	wprintf [#u16 "%.16g" f]
-	fflush null
+	wflush swprintf [cbuffer #u16 "%.16g" f]
 	f
 ]
 
 prin-float32*: func [f [float32!] return: [float32!]][
-	wprintf [#u16 "%.7g" as-float f]
-	fflush null
+	wflush swprintf [cbuffer #u16 "%.7g" as-float f]
 	f
 ]

@@ -9,15 +9,15 @@ REBOL [
 Red []													;-- make it usable by Red too.
 
 preprocessor: context [
-	exec:	 none										;-- object that captures directive words
+	exec:	 do [context [config: none]]				;-- object that captures directive words
 	protos:  make block! 10
-	macros:  make block! 10
+	macros:  [<none>]
 	stack:	 make block! 10
 	syms:	 make block! 20
 	depth:	 0											;-- track depth of recursive macro calls
 	active?: yes
 	trace?:  no
-	s: none
+	s:		 none
 	
 	do-quit: does [
 		case [
@@ -49,7 +49,7 @@ preprocessor: context [
 		][
 			error/where: new-line/all reduce [cmd] no
 			print form :error
-			halt
+			either system/console [throw/name 'halt-request 'console][halt]
 		]
 	]
 	
@@ -61,7 +61,7 @@ preprocessor: context [
 		do-quit
 	]
 	
-	do-safe: func [code [block!] /with cmd [issue!] /local res t?][
+	do-safe: func [code [block! paren!] /manual /with cmd [issue!] /local res t? src][
 		if t?: all [trace? not with][
 			print [
 				"preproc: matched" mold/flat copy/part get code/2 get code/3 lf
@@ -72,18 +72,31 @@ preprocessor: context [
 		if error? set/any 'res try code [throw-error :res any [cmd #macro] code]
 		#process on
 		
-		if t? [print ["preproc: ==" mold copy/part get/any 'res 1]]
+		if all [
+			manual
+			any [
+				(type? src: get code/2) <> type? get/any 'res
+				not same? head src head get/any 'res
+			]
+		][
+			print [
+				"*** Macro Error: [manual] macro not returning a position^/"
+				"*** Where:" mold code
+			]
+			do-quit
+		]
+		if t? [print ["preproc: ==" mold get/any 'res]]
 		either unset? get/any 'res [[]][:res]
 	]
 	
-	do-code: func [code [block!] cmd [issue!] /local p][
+	do-code: func [code [block! paren!] cmd [issue!] /local p][
 		clear syms
 		parse code [any [
 			p: set-word! (unless in exec p/1 [append syms p/1])
 			| skip
 		]]
 		unless empty? syms [exec: make exec append syms none]
-		do-safe/with bind code exec cmd
+		do-safe/with bind to block! code exec cmd
 	]
 	
 	count-args: func [spec [block!] /local total][
@@ -92,6 +105,7 @@ preprocessor: context [
 			any [
 				[word! | lit-word! | get-word!] (total: total + 1)
 				| refinement! (return total)
+				| skip
 			]
 		]
 		total
@@ -114,7 +128,7 @@ preprocessor: context [
 		arity
 	]
 	
-	fetch-next: func [code [block!] /local base arity value path][
+	fetch-next: func [code [block! paren!] /local base arity value path][
 		base: code
 		arity: 1
 		
@@ -145,7 +159,7 @@ preprocessor: context [
 		code
 	]
 	
-	eval: func [code [block!] cmd [issue!] /local after expr][
+	eval: func [code [block! paren!] cmd [issue!] /local after expr][
 		after: fetch-next code
 		expr: copy/part code after
 		if trace? [print ["preproc:" mold cmd mold expr]]
@@ -160,7 +174,6 @@ preprocessor: context [
 		depth: depth + 1
 		saved: s
 		parse next pos [arity [s: macros | skip]]		;-- resolve nested macros first
-		s: saved
 		
 		cmd: make block! 1
 		append cmd name
@@ -179,6 +192,7 @@ preprocessor: context [
 			do-quit
 		]
 		if trace? [print ["preproc: ==" mold :res]]
+		s: saved										;-- restored here as `do cmd` could call expand
 		s/1: :res
 		
 		if positive? depth: depth - 1 [
@@ -189,13 +203,15 @@ preprocessor: context [
 		s/1
 	]
 	
-	register-macro: func [spec [block!] /local cnt rule p name macro pos][
+	register-macro: func [spec [block!] /local cnt rule p name macro pos valid? named?][
+		named?: set-word? spec/1
 		cnt: 0
 		rule: make block! 10
-		unless parse spec/3 [
+		valid?: parse spec/3 [
 			any [
-				opt string! 
-				word! (cnt: cnt + 1)
+				opt string!
+				opt block!
+				[word! (cnt: cnt + 1) | /local any word!]
 				opt [
 					p: block! :p into [some word!]
 						;(append/only rule make block! 1)
@@ -203,16 +219,16 @@ preprocessor: context [
 						;(append rule '|)
 					;]
 				]
-				opt [/local some word!]
 			]
-		][
+		]
+		if any [not valid? all [not named? cnt <> 2]][
 			print [
 				"*** Macro Error: invalid specification^/"
 				"*** Where:" mold copy/part spec 3
 			]
 			do-quit
 		]
-		either set-word? spec/1 [						;-- named macro
+		either named? [									;-- named macro
 			repend rule [
 				name: to lit-word! spec/1
 				to-paren compose [change/part s do-macro (:name) s (cnt) (cnt + 1)]
@@ -227,14 +243,20 @@ preprocessor: context [
 				to set-word! 's
 				bind spec/1 exec						;-- allow rule to reference exec's words
 				to set-word! 'e
-				to-paren compose/deep [s: do-safe [(:macro) s e]]
+				to-paren compose/deep either all [
+					block? spec/3/1 find spec/3/1 'manual
+				][
+					[s: do-safe/manual [(:macro) s e]]
+				][
+					[s: change/part s do-safe [(:macro) s e] e]
+				]
 				to get-word! 's
 			]
 		]
 		
 		pos: tail macros
-		either tag? macros/1 [remove macros][append macros '|]
-		append macros rule
+		either tag? macros/1 [remove macros][insert macros '|]
+		insert macros rule
 		new-line pos yes
 		
 		exec: make exec protos
@@ -248,10 +270,10 @@ preprocessor: context [
 
 	expand: func [
 		code [block!] job [object! none!]
-		/keep
-		/local rule e pos cond value then else cases body keep? expr
+		/clean
+		/local rule e pos cond value then else cases body keep? expr src saved
 	][	
-		unless keep [reset job]
+		either clean [reset job][exec/config: job]
 
 		#process off
 		parse code rule: [
@@ -262,7 +284,19 @@ preprocessor: context [
 				| #system-global skip
 				
 				| s: #include (
-					if all [active? not Rebol system/state/interpreted?][s/1: 'do]
+					if active? [
+						either all [not Rebol system/state/interpreted?][
+							saved: s
+							attempt [expand load s/2 job]	;-- just preprocess it
+							s: saved
+							s/1: 'do
+						][
+							attempt [
+								src: red/load-source/hidden clean-path join red/main-path s/2
+								expand src job				;-- just preprocess it, real inclusion occurs later
+							]
+						]
+					]
 				)
 				| s: #if (set [cond e] eval next s s/1) :e [set then block! | (syntax-error s e)] e: (
 					if active? [either cond [change/part s then e][remove/part s e]]
@@ -298,9 +332,10 @@ preprocessor: context [
 					]
 				) :s
 				| s: #local [block! | (syntax-error s next s)] e: (
-					repend stack [tail macros tail protos]
-					change/part s expand/keep s/2 job e
-					loop 2 [clear take/last stack]
+					repend stack [negate length? macros tail protos]
+					change/part s expand s/2 job e
+					clear take/last stack
+					remove/part macros skip tail macros take/last stack
 					if tail? next macros [macros/1: <none>] ;-- re-inject a value to match (avoids infinite loops)
 				)
 				| s: #reset (reset job remove s) :s
@@ -331,10 +366,10 @@ preprocessor: context [
 	set 'expand-directives func [						;-- to be called from Red only
 		"Invokes the preprocessor on argument list, modifying and returning it"
 		code [block! paren!] "List of Red values to preprocess"
-		/keep 				 "Keep previous preprocessor state, do not reset it"
+		/clean 				 "Clear all previously created macros and words"
 		/local job
 	][
 		job: system/build/config
-		either keep [expand/keep code job][expand code job]
+		either clean [expand/clean code job][expand code job]
 	]
 ]

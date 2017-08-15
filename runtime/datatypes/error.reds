@@ -91,8 +91,8 @@ error: context [
 	]
 	
 	create: func [
-		cat		[red-word!]
-		id		[red-word!]
+		cat		[red-value!]							;-- expects a word!
+		id		[red-value!]							;-- expects a word!
 		arg1 	[red-value!]
 		arg2 	[red-value!]
 		arg3 	[red-value!]
@@ -103,8 +103,8 @@ error: context [
 			blk	 [red-block!]
 	][
 		blk: block/push* 2
-		block/rs-append blk as red-value! cat
-		block/rs-append blk as red-value! id
+		block/rs-append blk cat
+		block/rs-append blk id
 	
 		err:  make null as red-value! blk TYPE_ERROR
 		base: object/get-values err
@@ -135,7 +135,9 @@ error: context [
 				type = TYPE_GET_WORD
 			][
 				buffer: string/rs-make-at stack/push* 16
+				stack/mark-native words/_body
 				actions/mold object/rs-select obj value buffer no no yes null 0 0
+				stack/unwind
 				copy-cell as red-value! buffer value
 				stack/pop 1
 			]
@@ -161,6 +163,7 @@ error: context [
 			sym		[red-word!]
 			w		[red-word!]
 			cat		[integer!]
+			cat2	[integer!]
 	][
 		#if debug? = yes [if verbose > 0 [print-line "error/make"]]
 
@@ -195,16 +198,18 @@ error: context [
 				][
 					fire [TO_ERROR(script out-of-range) spec]
 				]
-				word/make-at w/symbol base + field-type	;-- set 'type field
+				w: word/make-at w/symbol base + field-type	;-- set 'type field
+				_context/bind-word GET_CTX(errors) w
 				
 				errors: (as red-object! object/get-values errors) + cat
 				sym: as red-word! object/get-words errors
 				
-				w: sym + (int/value // 100)
+				w: sym + (int/value // 100 + 2)
 				if (sym + object/get-size errors) <= as red-value! w [
 					fire [TO_ERROR(script out-of-range) spec]
 				]
-				word/make-at w/symbol base + field-id	;-- set 'id field
+				w: word/make-at w/symbol base + field-id	;-- set 'id field
+				_context/bind-word GET_CTX(errors) w
 			]
 			TYPE_BLOCK [
 				blk: as red-block! spec
@@ -213,44 +218,46 @@ error: context [
 				switch TYPE_OF(value) [
 					TYPE_WORD [
 						cat: object/rs-find errors value
-						
-						if cat = -1 [
-							fire [TO_ERROR(script invalid-spec-field) words/_type]
-						]
+						if cat = -1 [fire [TO_ERROR(script invalid-spec-field) words/_type]]
 						copy-cell value base + field-type
 						
 						errors: (as red-object! object/get-values errors) + cat
 						value: value + 1
 						if value < block/rs-tail blk [
-							cat: object/rs-find errors value
-							if cat = -1 [
-								fire [TO_ERROR(script invalid-spec-field) words/_id]
-							]
+							cat2: object/rs-find errors value
+							if cat2 = -1 [fire [TO_ERROR(script invalid-spec-field) words/_id]]
 							copy-cell value base + field-id
 						]
 					]
 					TYPE_SET_WORD [
-						value: block/select-word blk words/_type no
-						if TYPE_OF(value) = TYPE_NONE [
-							fire [TO_ERROR(script missing-spec-field) words/_type]
-						]
-						value: block/select-word blk words/_id no
-						if TYPE_OF(value) = TYPE_NONE [
-							fire [TO_ERROR(script missing-spec-field) words/_id]
-						]
 						_context/bind blk GET_CTX(new) new/ctx yes
 						interpreter/eval blk no
+
+						value: object/rs-select new as red-value! words/_type
+						if TYPE_OF(value) <> TYPE_WORD [
+							fire [TO_ERROR(script invalid-spec-field) words/_type]
+						]
+						cat: object/rs-find errors value
+						if cat = -1 [fire [TO_ERROR(script invalid-spec-field) words/_type]]
+
+						value: object/rs-select new as red-value! words/_id
+						if TYPE_OF(value) <> TYPE_WORD [
+							fire [TO_ERROR(script invalid-spec-field) words/_id]
+						]
+						errors: (as red-object! object/get-values errors) + cat
+						cat2: object/rs-find errors value
+						if cat2 = -1 [fire [TO_ERROR(script invalid-spec-field) words/_id]]
 					]
 					default [
 						fire [TO_ERROR(internal invalid-error)]
 					]
 				]
+				int: as red-integer! base + field-code
+				int/header: TYPE_INTEGER
+				int/value: cat * 100 + cat2 - 2
 			]
 			TYPE_STRING [
-				new: create
-					as red-word! #in system/catalog/errors user
-					as red-word! #in system/catalog/errors/user message
-					spec null null
+				new: create TO_ERROR(user message) spec null null
 			]
 			default [
 				fire [TO_ERROR(script bad-make-arg) datatype/push TYPE_ERROR spec]
@@ -258,7 +265,7 @@ error: context [
 		]
 		new
 	]
-
+	
 	form: func [
 		obj		[red-object!]
 		buffer	[red-string!]
@@ -271,7 +278,7 @@ error: context [
 			value	[red-value!]
 			str		[red-string!]
 			blk		[red-block!]
-			bool	[red-logic!]
+			int		[red-integer!]
 	][
 		#if debug? = yes [if verbose > 0 [print-line "error/form"]]
 		
@@ -281,15 +288,18 @@ error: context [
 		
 		errors: as red-object! #get system/catalog/errors
 		errors: as red-object! object/rs-select errors base + field-type
+		if TYPE_Of(errors) = TYPE_NONE [fire [TO_ERROR(internal invalid-error) base + field-type]]
 		
 		str: as red-string! object/rs-select errors as red-value! words/_type
 		assert TYPE_OF(str) = TYPE_STRING
+		
 		string/concatenate buffer str -1 0 yes no
 		part: part - string/rs-length? str
 		string/concatenate-literal buffer ": "
 		part: part - 2
 		
 		value: object/rs-select errors base + field-id
+		if TYPE_Of(value) = TYPE_NONE [fire [TO_ERROR(internal invalid-error) base + field-id]]
 		
 		either TYPE_OF(value) = TYPE_STRING [
 			str: as red-string! value
@@ -312,15 +322,12 @@ error: context [
 			part: part - 3
 		]
 		
-		bool: as red-logic! #get system/state/trace?
-		if all [
-			TYPE_OF(bool) = TYPE_LOGIC
-			bool/value
-		][
+		int: as red-integer! #get system/state/trace
+		if all [TYPE_OF(int) = TYPE_INTEGER int/value > 0][
 			value: base + field-stack
 			if TYPE_OF(value) = TYPE_INTEGER [
 				string/concatenate-literal buffer "^/*** Stack: "
-				part: stack/trace as red-integer! value buffer part - 12
+				part: stack/trace int/value as red-integer! value buffer part - 12
 			]
 		]
 		part

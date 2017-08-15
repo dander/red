@@ -10,49 +10,6 @@ Red [
 	}
 ]
 
-
-cos: routine [
-	"Returns the trigonometric cosine"
-	angle [float!] "Angle in radians"
-][
-	natives/cosine* no 1
-]
-
-sin: routine [
-	"Returns the trigonometric sine"
-	angle [float!] "Angle in radians"
-][
-	natives/sine* no 1
-]
-
-tan: routine [
-	"Returns the trigonometric tangent"
-	angle [float!] "Angle in radians"
-][
-	natives/tangent* no 1
-]
-
-acos: routine [
-	"Returns the trigonometric arccosine"
-	angle [float!] "Angle in radians"
-][
-	natives/arccosine* no 1
-]
-
-asin: routine [
-	"Returns the trigonometric arcsine"
-	angle [float!] "Angle in radians"
-][
-	natives/arcsine* no 1
-]
-
-atan: routine [
-	"Returns the trigonometric arctangent"
-	angle [float!] "Angle in radians"
-][
-	natives/arctangent* no 1
-]
-
 quit-return: routine [
 	"Stops evaluation and exits the program with a given status"
 	status			[integer!] "Process termination value to return"
@@ -68,22 +25,10 @@ set-quiet: routine [
 	_context/set word stack/arguments + 1
 ]
 
-browse: routine [
-	"Open web browser to a URL"
-	url [url!]
-][
-	#either OS = 'Windows [
-		platform/ShellExecute 0 #u16 "open" unicode/to-utf16 as red-string! url 0 0 1
-		unset/push-last
-	][
-		fire [TO_ERROR(internal not-here) words/_browse]
-	]
-]
-
 ;-- Following definitions are used to create op! corresponding operators
 shift-right:   routine [data [integer!] bits [integer!]][natives/shift* no -1 -1]
-shift-left:	   routine [data [integer!] bits [integer!]][natives/shift* no 1 -1]
-shift-logical: routine [data [integer!] bits [integer!]][natives/shift* no -1 1]
+shift-left:	   routine [data [integer!] bits [integer!]][natives/shift* no  1 -1]
+shift-logical: routine [data [integer!] bits [integer!]][natives/shift* no -1  1]
 
 ;-- Helping routine for console, returns true if last output character was a LF
 last-lf?: routine [/local bool [red-logic!]][
@@ -137,8 +82,13 @@ as-ipv4: routine [
 as-rgba: :as-ipv4
 
 ;-- Temporary definition --
-as-paren: routine [blk [series!]][
-	if TYPE_OF(blk) = TYPE_BLOCK [blk/header: TYPE_PAREN]
+
+read-clipboard: routine [][
+	stack/set-last clipboard/read
+]
+
+write-clipboard: routine [data [string!]][
+	logic/box clipboard/write as red-value! data
 ]
 
 write-stdout: routine [str [string!]][			;-- internal use only

@@ -321,6 +321,8 @@ block: context [
 		size	[integer!]
 		return: [red-block!]
 	][
+		if size < 0 [size: 1]
+		
 		blk/header: TYPE_BLOCK							;-- implicit reset of all header flags
 		blk/head: 	0
 		blk/node: 	alloc-cells size
@@ -538,30 +540,34 @@ block: context [
 		type	[integer!]
 		return:	[red-block!]
 		/local
-			t	 [integer!]
 			size [integer!]
 			int	 [red-integer!]
-			f	 [red-float!]
+			fl	 [red-float!]
 	][
 		#if debug? = yes [if verbose > 0 [print-line "block/make"]]
 
-		t: TYPE_OF(spec)
-		switch t [
+		switch TYPE_OF(spec) [
 			TYPE_INTEGER
 			TYPE_FLOAT [
-				either t = TYPE_INTEGER [
-					int: as red-integer! spec
-					size: int/value
-				][
-					f: as red-float! spec
-					size: as-integer f/value
-				]
+				size: GET_SIZE_FROM(spec)
 				if zero? size [size: 1]
 				make-at proto size
 				proto/header: type
 				proto
 			]
-			default [to proto spec type]
+			TYPE_ANY_PATH
+			TYPE_ANY_LIST [
+				proto: clone as red-block! spec no no
+				proto/header: type
+				proto
+			]
+			TYPE_OBJECT [object/reflect as red-object! spec words/body]
+			TYPE_MAP	[map/reflect as red-hash! spec words/body]
+			TYPE_VECTOR [vector/to-block as red-vector! spec proto]
+			default [
+				fire [TO_ERROR(script bad-make-arg) datatype/push type spec]
+				null
+			]
 		]
 	]
 
@@ -581,13 +587,10 @@ block: context [
 			TYPE_VECTOR [vector/to-block as red-vector! spec proto]
 			TYPE_STRING [
 				str: as red-string! spec
-				#call [system/lexer/transcode str none none]
+				#call [system/lexer/transcode str none no]
 			]
 			TYPE_TYPESET [typeset/to-block as red-typeset! spec proto]
-			TYPE_PATH
-			TYPE_GET_PATH
-			TYPE_SET_PATH
-			TYPE_LIT_PATH
+			TYPE_ANY_PATH
 			TYPE_ANY_LIST [proto: clone as red-block! spec no no]
 			default [rs-append make-at proto 1 spec]
 		]
@@ -696,6 +699,7 @@ block: context [
 			int  [red-integer!]
 			set? [logic!]
 			type [integer!]
+			s	 [series!]
 	][
 		set?: value <> null
 		type: TYPE_OF(element)
@@ -705,6 +709,10 @@ block: context [
 				_series/poke as red-series! parent int/value value null
 				value
 			][
+				s: GET_BUFFER(parent)
+				if s/flags and flag-series-owned <> 0 [
+					copy-cell as red-value! parent as red-value! object/path-parent
+				]
 				_series/pick as red-series! parent int/value null
 			]
 		][
@@ -716,6 +724,10 @@ block: context [
 				actions/poke as red-series! element 2 value null
 				value
 			][
+				s: GET_BUFFER(parent)
+				if s/flags and flag-series-owned <> 0 [
+					copy-cell as red-value! parent as red-value! object/path-parent
+				]
 				either type = TYPE_WORD [
 					select-word parent as red-word! element case?
 				][
@@ -817,7 +829,7 @@ block: context [
 		]
 		
 		type: TYPE_OF(value)
-		any-blk?: either all [same? hash?][no][ANY_BLOCK?(type)]
+		any-blk?: either all [same? hash?][no][ANY_BLOCK_STRICT?(type)]
 
 		either any [
 			match?
@@ -954,14 +966,7 @@ block: context [
 		if TYPE_OF(result) <> TYPE_NONE [
 			offset: either only? [1][					;-- values > 0 => series comparison mode
 				type: TYPE_OF(value)
-				either any [							;@@ replace with ANY_BLOCK?
-					type = TYPE_BLOCK
-					type = TYPE_PAREN
-					type = TYPE_PATH
-					type = TYPE_GET_PATH
-					type = TYPE_SET_PATH
-					type = TYPE_LIT_PATH
-				][
+				either ANY_BLOCK_STRICT?(type) [
 					b: as red-block! value
 					s: GET_BUFFER(b)
 					(as-integer s/tail - s/offset) >> 4 - b/head
@@ -1002,6 +1007,7 @@ block: context [
 			slot: s/offset + blk/head + 1
 			if slot >= s/tail [slot: alloc-tail s]
 			copy-cell value slot
+			ownership/check as red-value! blk words/_put slot blk/head + 1 1
 		]
 		value
 	]
@@ -1092,7 +1098,7 @@ block: context [
 			]
 			TYPE_INTEGER [
 				int: as red-integer! res
-				negate int/value
+				0 - int/value
 			]
 			TYPE_FLOAT [
 				d: as red-float! res
@@ -1157,7 +1163,7 @@ block: context [
 			if len2 < len [
 				len: len2
 				if negative? len2 [
-					len2: negate len2
+					len2: 0 - len2
 					blk/head: blk/head - len2
 					len: either negative? blk/head [blk/head: 0 0][len2]
 					head: head - len

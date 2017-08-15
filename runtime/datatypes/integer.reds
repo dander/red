@@ -143,7 +143,7 @@ integer: context [
 			return "-2147483648"
 		]
 		n: negative? i
-		if n [i: negate i]
+		if n [i: 0 - i]
 		c: 11
 		while [i <> 0][
 			s/c: #"0" + (i // 10)
@@ -207,12 +207,12 @@ integer: context [
 	]
 
 	do-math: func [
-		type		[math-op!]
+		op			[math-op!]
 		return:		[red-value!]
 		/local
 			left	[red-integer!]
 			right	[red-integer!]
-			pair	[red-pair!]
+			word	[red-word!]
 			value	[integer!]
 			size	[integer!]
 			n		[integer!]
@@ -234,44 +234,51 @@ integer: context [
 			TYPE_OF(right) = TYPE_PAIR
 			TYPE_OF(right) = TYPE_TUPLE
 			TYPE_OF(right) = TYPE_TIME
+			TYPE_OF(right) = TYPE_VECTOR
+			TYPE_OF(right) = TYPE_DATE
 		]
 
 		switch TYPE_OF(right) [
 			TYPE_INTEGER TYPE_CHAR [
-				left/value: do-math-op left/value right/value type
+				left/value: do-math-op left/value right/value op
 			]
-			TYPE_FLOAT TYPE_PERCENT TYPE_TIME [float/do-math type]
-			TYPE_PAIR  [
-				value: left/value
+			TYPE_FLOAT TYPE_PERCENT TYPE_TIME [float/do-math op]
+			TYPE_PAIR
+			TYPE_TUPLE [
+				value: left/value						;-- swap them!
 				copy-cell as red-value! right as red-value! left
-				pair: as red-pair! left
-				switch type [
-					OP_ADD [pair/x: pair/x + value  pair/y: pair/y + value]
-					OP_MUL [pair/x: pair/x * value  pair/y: pair/y * value]
-					OP_OR OP_AND OP_XOR OP_REM OP_SUB OP_DIV [
-						ERR_EXPECT_ARGUMENT(TYPE_PAIR 1)
+				right/header: TYPE_INTEGER
+				right/value: value
+				
+				either TYPE_OF(left) = TYPE_PAIR [
+					if op = OP_DIV [
+						fire [TO_ERROR(script not-related) words/_divide datatype/push TYPE_INTEGER]
 					]
+					if op = OP_SUB [
+						pair/negate						;-- negates the pair! now in stack/arguments
+						op: OP_ADD
+					]
+					pair/do-math op
+				][
+					if any [op = OP_SUB op = OP_DIV][
+						word: either op = OP_SUB [words/_subtract][words/_divide]
+						fire [TO_ERROR(script not-related) word datatype/push TYPE_INTEGER]
+					]
+					tuple/do-math op
 				]
 			]
-			TYPE_TUPLE [
-				value: left/value
-				copy-cell as red-value! right as red-value! left
-				tp: (as byte-ptr! left) + 4
-				size: TUPLE_SIZE?(right)
-				n: 0
-				until [
-					n: n + 1
-					v: as-integer tp/n
-					switch type [
-						OP_ADD [v: v + value]
-						OP_MUL [v: v * value]
-						OP_OR OP_AND OP_XOR OP_REM OP_SUB OP_DIV [
-							ERR_EXPECT_ARGUMENT(TYPE_PERCENT 1)
-						]
-					]
-					either v > 255 [v: 255][if negative? v [v: 0]]
-					tp/n: as byte! v
-					n = size
+			TYPE_VECTOR [
+				return stack/set-last vector/do-math-scalar op as red-vector! right as red-value! left
+			]
+			TYPE_DATE [
+				either op = OP_ADD [
+					value: left/value						;-- swap them!
+					copy-cell as red-value! right as red-value! left
+					right/header: TYPE_INTEGER
+					right/value: value
+					date/do-math op
+				][
+					fire [TO_ERROR(script not-related) words/_subtract datatype/push TYPE_INTEGER]
 				]
 			]
 			default [
@@ -379,6 +386,11 @@ integer: context [
 			int  [red-integer!]
 			fl	 [red-float!]
 			t	 [red-time!]
+			pad1 [integer!]
+			pad2 [integer!]
+			pad3 [integer!]
+			pad4 [integer!]
+			val	 [red-value!]
 	][
 		#if debug? = yes [if verbose > 0 [print-line "integer/to"]]
 		
@@ -390,10 +402,6 @@ integer: context [
 		switch TYPE_OF(spec) [
 			TYPE_CHAR [
 				int/value: spec/data2
-			]
-			TYPE_TIME [
-				t: as red-time! spec
-				int/value: as-integer t/time / time/oneE9
 			]
 			TYPE_FLOAT
 			TYPE_PERCENT [
@@ -407,7 +415,18 @@ integer: context [
 			TYPE_ISSUE [
 				int/value: from-issue as red-word! spec
 			]
+			TYPE_TIME [
+				t: as red-time! spec
+				int/value: as-integer t/time + 0.5
+			]
+			TYPE_DATE [
+				int/value: date/to-epoch as red-date! spec
+			]
 			TYPE_ANY_STRING [
+				pad4: 0
+				val: as red-value! :pad4
+				copy-cell spec val					;-- save spec, load-value will change it
+
 				proto: load-value as red-string! spec
 				
 				either TYPE_OF(proto) = TYPE_FLOAT [
@@ -418,7 +437,7 @@ integer: context [
 					int/value: as-integer fl/value
 				][
 					if TYPE_OF(proto) <> TYPE_INTEGER [ 
-						fire [TO_ERROR(script bad-to-arg) datatype/push TYPE_INTEGER proto]
+						fire [TO_ERROR(script bad-to-arg) datatype/push TYPE_INTEGER val]
 					]
 				]
 			]
@@ -488,7 +507,7 @@ integer: context [
 				char: as red-char! value2				;@@ could be optimized as integer! and char!
 				right: char/value						;@@ structures are overlapping exactly
 			]
-			TYPE_FLOAT [
+			TYPE_FLOAT TYPE_PERCENT [
 				f: as red-float! value1
 				left: value1/value
 				f/value: as-float left
@@ -583,9 +602,13 @@ integer: context [
 	][
 		res: 1
 		while [exp <> 0][
-			if as logic! exp and 1 [res: res * base]
+			if as logic! exp and 1 [
+				res: res * base
+				if system/cpu/overflow? [throw RED_INT_OVERFLOW]
+			]
 			exp: exp >> 1
 			base: base * base
+			if system/cpu/overflow? [throw RED_INT_OVERFLOW]
 		]
 		res
 	]
@@ -596,19 +619,25 @@ integer: context [
 			base [red-integer!]
 			exp  [red-integer!]
 			f	 [red-float!]
+			up?	 [logic!]
 	][
 		base: as red-integer! stack/arguments
 		exp: base + 1
-		either any [
+		up?: any [
 			TYPE_OF(exp) = TYPE_FLOAT
 			negative? exp/value
-		][
+		]
+		unless up? [
+			catch RED_INT_OVERFLOW [
+				base/value: int-power base/value exp/value
+			]
+		]
+		if any [up? system/thrown = RED_INT_OVERFLOW][
+			system/thrown: 0
 			f: as red-float! base
 			f/value: as-float base/value
 			f/header: TYPE_FLOAT
 			float/power
-		][
-			base/value: int-power base/value exp/value
 		]
 		as red-value! base
 	]
@@ -627,13 +656,13 @@ integer: context [
 		as-logic int/value and 1
 	]
 
-	#define INT_TRUNC [int/value: either num > 0 [n - r][r - n]]
+	#define INT_TRUNC [val: either num > 0 [n - r][r - n]]
 
 	#define INT_FLOOR [
 		either m < 0 [
 			fire [TO_ERROR(math overflow)]
 		][
-			int/value: either num > 0 [n - r][0 - m]
+			val: either num > 0 [n - r][0 - m]
 		]
 	]
 
@@ -641,7 +670,7 @@ integer: context [
 		either m < 0 [
 			fire [TO_ERROR(math overflow)]
 		][
-			int/value: either num < 0 [r - n][m]
+			val: either num < 0 [r - n][m]
 		]
 	]
 
@@ -649,7 +678,7 @@ integer: context [
 		either m < 0 [
 			fire [TO_ERROR(math overflow)]
 		][
-			int/value: either num > 0 [m][0 - m]
+			val: either num > 0 [m][0 - m]
 		]
 	]
 
@@ -672,6 +701,7 @@ integer: context [
 			n		[integer!]
 			m		[integer!]
 			r		[integer!]
+			val		[integer!]
 	][
 		int: as red-integer! value
 		num: int/value
@@ -705,6 +735,7 @@ integer: context [
 			half-ceil?	[INT_CEIL ]
 			true		[INT_AWAY ]
 		]
+		int/value: val
 		value
 	]
 

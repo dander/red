@@ -131,6 +131,7 @@ typeset: context [
 				TYPE_WORD [
 					set-type ts as red-value! object!-type	;@@ user-defined types are object! for now
 				]
+				TYPE_BLOCK [0]								;-- <type!> [<extra>], just skip it
 				default [
 					fire [TO_ERROR(script invalid-type-spec) value]
 				]
@@ -214,19 +215,29 @@ typeset: context [
 		sets	[red-typeset!]
 		value	[red-value!]
 		/local
-			type [red-datatype!]
+			dt	 [red-datatype!]
 			id   [integer!]
 			bits [byte-ptr!]
 			pos	 [byte-ptr!]
+			src	 [int-ptr!]
+			dst	 [int-ptr!]
 	][
-		type: as red-datatype! value
-		if TYPE_OF(type) = TYPE_WORD [
-			type: as red-datatype! word/get as red-word! type
+		dt: as red-datatype! value
+		if TYPE_OF(dt) = TYPE_WORD [
+			dt: as red-datatype! word/get as red-word! dt
 		]
-		if TYPE_OF(type) <> TYPE_DATATYPE [
+		if TYPE_OF(dt) = TYPE_TYPESET [
+			dst: (as int-ptr! sets) + 1					;-- skip header
+			src: (as int-ptr! dt) + 1					;-- skip header
+			dst/1: dst/1 or src/1
+			dst/2: dst/2 or src/2
+			dst/3: dst/3 or src/3
+			exit
+		]
+		if TYPE_OF(dt) <> TYPE_DATATYPE [
 			fire [TO_ERROR(script invalid-arg) value]
 		]
-		id: type/value
+		id: dt/value
 		assert id < 96
 		bits: (as byte-ptr! sets) + 4					;-- skip header
 		BS_SET_BIT(bits id)
@@ -380,7 +391,13 @@ typeset: context [
 			COMP_EQUAL
 			COMP_SAME
 			COMP_STRICT_EQUAL
-			COMP_NOT_EQUAL
+			COMP_NOT_EQUAL [
+				res: as-integer any [
+					set1/array1 <> set2/array1
+					set1/array2 <> set2/array2
+					set1/array3 <> set2/array3
+				]
+			]
 			COMP_SORT
 			COMP_CASE_SORT [
 				res: SIGN_COMPARE_RESULT((rs-length? set1) (rs-length? set2))

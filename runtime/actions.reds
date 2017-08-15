@@ -13,7 +13,7 @@ Red/System [
 actions: context [
 	verbose: 0
 	
-	table: declare int-ptr!
+	table: as int-ptr! 0
 	
 	register: func [
 		[variadic]
@@ -1555,7 +1555,29 @@ actions: context [
 
 	create*: func [][]
 	close*: func [][]
-	delete*: func [][]
+	
+	delete*: func [
+		return:	[red-value!]
+	][
+		stack/set-last delete stack/arguments
+	]
+	
+	delete: func [
+		file	[red-value!]
+		return: [red-value!]
+		/local
+			action-delete
+	][
+		#if debug? = yes [if verbose > 0 [print-line "actions/delete"]]
+
+		action-delete: as function! [
+			file	[red-value!]
+			return: [red-value!]
+		] get-action-ptr file ACT_DELETE
+
+		action-delete file
+	]
+	
 	open*: func [][]
 	open?*: func [][]
 	query*: func [][]
@@ -1731,7 +1753,7 @@ actions: context [
 			;-- I/O actions --
 			null			;create
 			null			;close
-			null			;delete
+			:delete*
 			:modify*
 			null			;open
 			null			;open?

@@ -13,8 +13,8 @@ Red/System [
 int-array!: alias struct! [ptr [int-ptr!]]
 
 ;-- cell header bits layout --
-;   31:		lock							;-- lock series for active thread access only
-;   30:		new-line						;-- new-line (LF) marker (before the slot)
+;	31:		lock							;-- lock series for active thread access only
+;	30:		new-line						;-- new-line (LF) marker (before the slot)
 ;	29-25:	arity							;-- arity for routine! functions.
 ;	24:		self?							;-- self-aware context flag
 ;	23:		node-body						;-- op! body points to a block node (instead of native code)
@@ -22,8 +22,9 @@ int-array!: alias struct! [ptr [int-ptr!]]
 ;	18:		series-owned					;-- mark a series owned by an object
 ;	17:		owner							;-- indicate that an object is an owner
 ;	16:		native! op						;-- operator is made from a native! function
-;   15-8:	<reserved>
-;   7-0:	datatype ID						;-- datatype number
+;	15:		extern flag						;-- routine code is external to Red (from FFI)
+;	14-8:	<reserved>
+;	7-0:	datatype ID						;-- datatype number
 
 cell!: alias struct! [
 	header	[integer!]						;-- cell's header flags
@@ -171,7 +172,13 @@ allocate-virtual: func [
 ][
 	size: round-to size + 4	platform/page-size	;-- account for header (one word)
 	memory/total: memory/total + size
-	ptr: platform/allocate-virtual size exec?
+	catch OS_ERROR_VMEM_ALL [
+		ptr: platform/allocate-virtual size exec?
+	]
+	if system/thrown > OS_ERROR_VMEM [
+		system/thrown: 0
+		fire [TO_ERROR(internal no-memory)]
+	]
 	ptr/value: size							;-- store size in header
 	ptr + 1									;-- return pointer after header
 ]
@@ -184,7 +191,13 @@ free-virtual: func [
 ][
 	ptr: ptr - 1							;-- return back to header
 	memory/total: memory/total - ptr/value
-	platform/free-virtual ptr
+	catch OS_ERROR_VMEM_ALL [
+		platform/free-virtual ptr
+	]
+	if system/thrown > OS_ERROR_VMEM [
+		system/thrown: 0
+		fire [TO_ERROR(internal wrong-mem)]
+	]
 ]
 
 ;-------------------------------------------
@@ -825,4 +838,39 @@ free-big: func [
 	]
 	
 	free-virtual as int-ptr! frame			;-- release the memory to the OS
+]
+
+#if libRed? = yes [
+
+	;-- Intermediary buffer used for holding Red values passed as arguments to an external
+	;-- routine.
+	
+	ext-ring: context [
+		head: as cell! 0
+		tail: as cell! 0
+		pos:  as cell! 0
+		size: 50
+		
+		store: func [
+			value	[cell!]
+			return: [cell!]
+		][
+			copy-cell value alloc
+		]
+		
+		alloc: func [return: [cell!]][
+			pos: pos + 1
+			if pos = tail [pos: head]
+			pos
+		]
+		
+		init: does [
+			head: as cell! allocate size * size? cell!
+			tail: head + size
+			pos:  head
+		]
+		
+		destroy: does [free as byte-ptr! head]
+	]
+	
 ]

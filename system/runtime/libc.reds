@@ -50,13 +50,16 @@ Red/System [
 		quit:		 "exit" [
 			status		[integer!]
 		]
+		fflush:		 "fflush" [
+			fd			[integer!]
+			return:		[integer!]
+		]
 		putchar: 	 "putchar" [
 			char		[byte!]
 		]
-		printf: 	 "printf"  [[variadic]]
-		
-		sprintf:	 "sprintf" [[variadic]]
-		
+		printf: 	 "printf"	[[variadic]]
+		sprintf:	 "sprintf"	[[variadic] return: [integer!]]
+		swprintf:	 "swprintf"	[[variadic] return: [integer!]]
 		strtod:		 "strtod"  [
 			str			[byte-ptr!]
 			endptr		[byte-ptr!]
@@ -102,9 +105,9 @@ Red/System [
 			radians		[float!]
 			return:		[float!]
 		]
-		atan2:       "atan2" [
-			y           [float!]
-			x           [float!]
+		atan2:		"atan2" [
+			y			[float!]
+			x			[float!]
 			return:		[float!]
 		]
 		ldexp:		"ldexp" [
@@ -117,11 +120,11 @@ Red/System [
 			exponent	[int-ptr!]
 			return:		[float!]
 		]
-		log10:		"log10" [
+		log-10:		"log10" [
 			value		[float!]
 			return:		[float!]
 		]
-		log:		"log" [
+		log-2:		"log" [
 			value		[float!]
 			return:		[float!]
 		]

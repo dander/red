@@ -37,20 +37,34 @@ Red [
 		--assert ["*test12*" #if #either #switch #case #do] 
 			= load {["*test12*" #if #either #switch #case #do]}
 		#process on
+	
+	--test-- "#do keep"
+		probe #do keep [1]
+		--assert 1 = #do keep [1]	
+	
+	--test-- "#do : issue #2924"
+		--assert 2 = (#do keep [2])
 
 ===end-group===
 
 ===start-group=== "Macros"
 
 	--test-- "macro-1"
-		#do [a: 12]
+		#do [
+			unless value? 'maximum-of [
+				maximum-of: function [list [block! paren!]][
+					m: list forall list [if list/1 > m/1 [m: list]]
+					m
+				]
+			]
+			a: 12
+		]
 
 		#macro add2: func [n][n + 2]
 		#macro foo: func [a b][add2 a + b]
 		#macro bar: func [a b][a - b]
 		#macro ['max some [integer!]] func [s e][
-			change/part s first maximum-of copy/part next s e e 
-			s
+			first maximum-of copy/part next s e
 		]
 
 	--test-- "macro-2"
@@ -60,7 +74,7 @@ Red [
 		--assert 12 = foo 1 foo 3 4
 
 		#local [
-			#macro integer! func [s e][print ["inc:" s/1] s/1: s/1 + 1 next s]
+			#macro integer! func [s e][s/1 + 1]
 			--test-- "macro-4"
 				--assert (load "17") = foo 1 foo 3 4
 			--test-- "macro-5"

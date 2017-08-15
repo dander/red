@@ -227,15 +227,26 @@ _function: context [
 		either zero? native/code [
 			interpreter/eval-function fun as red-block! s/offset
 		][
-			either ctx = global-ctx [
-				call: as function! [] native/code
-				call
-				0										;FIXME: required to pass compilation
-			][
-				ocall: as function! [octx [node!]] native/code
-				ocall ctx
-				0
+			catch RED_THROWN_ERROR [
+				either ctx = global-ctx [
+					call: as function! [] native/code
+					call
+					0									;FIXME: required to pass compilation
+				][
+					ocall: as function! [octx [node!]] native/code
+					ocall ctx
+					0
+				]
 			]
+			switch system/thrown [
+				RED_THROWN_ERROR
+				RED_THROWN_BREAK
+				RED_THROWN_CONTINUE
+				RED_THROWN_THROW	[re-throw]			;-- let exception pass through
+				RED_THROWN_RETURN	[stack/unwind-last]
+				default [0]								;-- else, do nothing
+			]
+			system/thrown: 0
 		]
 	]
 
@@ -609,7 +620,6 @@ _function: context [
 	][
 		list: block/push* 8
 		ignore: block/clone spec no no
-		block/rs-append ignore as red-value! refinements/local
 		
 		value:  as red-value! refinements/extern		;-- process optional /extern
 		extern: as red-block! block/find spec value null no no no no null null no no no no
@@ -652,6 +662,7 @@ _function: context [
 				TYPE_WORD 	  [0]						;-- do nothing
 				TYPE_REFINEMENT
 				TYPE_GET_WORD
+				TYPE_LIT_WORD
 				TYPE_SET_WORD [
 					value/header: TYPE_WORD				;-- convert it to a word!
 				]
@@ -906,7 +917,7 @@ _function: context [
 			fire [TO_ERROR(script bad-func-def)	list]
 		]
 		push spec body null 0 null
-		as red-function! stack/top - 1
+		as red-function! stack/get-top
 	]
 	
 	reflect: func [
@@ -963,14 +974,13 @@ _function: context [
 		return: [integer!]
 		/local
 			s	  [series!]
-			blk	  [red-block!]
+			blk	  [red-block! value]
 			value [red-value!]
 	][
 		#if debug? = yes [if verbose > 0 [print-line "function/mold"]]
 
 		string/concatenate-literal buffer "func "
 		
-		blk: as red-block! stack/push*
 		blk/header: TYPE_BLOCK
 		blk/head: 0
 		blk/node: fun/spec

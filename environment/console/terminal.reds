@@ -149,6 +149,7 @@ terminal: context [
 	v-terminal: 0
 	extra-table: [0]						;-- extra unicode check table for Windows
 	stub-table: [0 0]
+	data-blk: declare red-value!
 
 	#include %wcwidth.reds
 
@@ -617,12 +618,12 @@ terminal: context [
 		char-x	[integer!]
 		char-y	[integer!]
 		/local
-			out		[ring-buffer!]
+			out	[ring-buffer!]
 	][
 		out: as ring-buffer! allocate size? ring-buffer!
 		out/max: 10000
 		out/lines: as line-node! allocate out/max * size? line-node!
-		out/data: as red-string! string/rs-make-at ALLOC_TAIL(root) 10000
+		out/data: as red-string! string/rs-make-at data-blk 10000
 
 		vt/bg-color: 00FCFCFCh
 		vt/font-color: 00000000h
@@ -1007,12 +1008,13 @@ terminal: context [
 			cut-red-string out/data string/rs-length? str out2
 			cut-red-string str -1 null
 
+			str2: as red-string! block/rs-head result
+			vt/cursor: vt/prompt-len + str2/head
+			str2/head: 0
 			either num = 1 [
-				str2: as red-string! block/rs-head result
-				vt/cursor: vt/prompt-len + str2/head
-				str2/head: 0
 				string/concatenate str str2 -1 0 yes no
 			][
+				block/rs-next result
 				until [
 					string/concatenate str as red-string! block/rs-head result -1 0 yes no
 					string/append-char GET_BUFFER(str) 32
@@ -1025,8 +1027,7 @@ terminal: context [
 			emit-string vt str yes yes
 			if num > 1 [
 				cut-red-string str -1 null
-				line/head: 0
-				string/concatenate str line -1 0 yes no
+				string/concatenate str str2 -1 0 yes no
 				head: str/head
 				str/head: 0
 				emit-string vt str no no
@@ -1479,7 +1480,7 @@ terminal: context [
 		#switch OS [
 			Windows  [#include %windows.reds]
 			Android  []
-			MacOSX   []
+			macOS    []
 			FreeBSD  []
 			Syllable []
 			#default []									;-- Linux

@@ -31,7 +31,7 @@ word: context [
 		str 	[c-string!]
 		return:	[red-word!]
 	][
-		_context/add-global-word symbol/make str yes
+		_context/add-global-word symbol/make str yes yes
 	]
 	
 	make-at: func [
@@ -157,6 +157,10 @@ word: context [
 		#if debug? = yes [if verbose > 0 [print-line "word/get-local"]]
 
 		ctx: TO_CTX(node)
+		if null? ctx/values [
+			s: as series! ctx/symbols/value
+			fire [TO_ERROR(script not-defined) s/offset + index]
+		]
 		
 		value: either ON_STACK?(ctx) [
 			(as red-value! ctx/values) + index
@@ -194,10 +198,24 @@ word: context [
 			value  [red-value!]
 			values [series!]
 	][
-		value: stack/top - 1
+		value: stack/get-top
 		ctx: TO_CTX(node)
 		values: as series! ctx/values/value
 		stack/push values/offset + index
+		copy-cell value values/offset + index
+	]
+	
+	set-in-ctx: func [
+		node	[node!]
+		index	[integer!]
+		/local
+			ctx	   [red-context!]
+			value  [red-value!]
+			values [series!]
+	][
+		value: stack/get-top
+		ctx: TO_CTX(node)
+		values: as series! ctx/values/value
 		copy-cell value values/offset + index
 	]
 	
@@ -256,7 +274,7 @@ word: context [
 		value
 	]
 
-	to-string: func [
+	as-string: func [
 		w		[red-word!]
 		return: [red-string!]
 		/local
@@ -269,6 +287,29 @@ word: context [
 		str/head: 0
 		str/cache: null
 		str
+	]
+	
+	check-1st-char: func [
+		w [red-word!]
+		/local
+			sym [red-symbol!]
+			buf	[series!]
+			s   [c-string!]
+			cp  [integer!]
+			c   [byte!]
+	][
+		sym: symbol/get w/symbol
+		buf: as series! sym/node/value
+		cp: string/get-char as byte-ptr! buf/offset GET_UNIT(buf)
+		if cp > 127 [exit]
+		c: as-byte cp
+		
+		s: {/\^^,[](){}"#%$@:;'0123465798}
+		until [
+			if c = s/1 [fire [TO_ERROR(syntax bad-char) w]]
+			s: s + 1
+			s/1 = null-byte
+		]
 	]
 
 	;-- Actions --
@@ -326,6 +367,7 @@ word: context [
 			data	[byte-ptr!]
 			cstr	[c-string!]
 			len		[integer!]
+			val		[red-value!]
 	][
 		#if debug? = yes [if verbose > 0 [print-line "word/to"]]
 
@@ -334,11 +376,17 @@ word: context [
 			TYPE_SET_WORD
 			TYPE_GET_WORD
 			TYPE_LIT_WORD
-			TYPE_REFINEMENT
-			TYPE_ISSUE [proto: spec]
+			TYPE_REFINEMENT [proto: spec]
+			TYPE_ISSUE [
+				check-1st-char as red-word! spec
+				proto: spec
+			]
 			TYPE_STRING [
+				len: 0
+				val: as red-value! :len
+				copy-cell spec val					;-- save spec, load-value will change it
 				proto: load-value as red-string! spec
-				unless any-word? type [fire [TO_ERROR(syntax bad-char) proto]]
+				unless any-word? TYPE_OF(proto) [fire [TO_ERROR(syntax bad-char) val]]
 			]
 			TYPE_CHAR [
 				char: as red-char! spec

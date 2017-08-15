@@ -130,7 +130,6 @@ file: context [
 			s: string/append-char s either c = as-integer #"/" [OS_DIR_SEP][c]
 			p: p + unit
 		]
-		out
 	]
 
 	normalize: func [
@@ -218,6 +217,14 @@ file: context [
 	]
 
 	;-- I/O actions
+	
+	delete: func [
+		file	[red-value!]
+		return: [red-value!]
+	][
+		as red-value! logic/box simple-io/delete as red-file! file
+	]
+	
 	read: func [
 		src		[red-value!]
 		part	[red-value!]
@@ -304,7 +311,7 @@ file: context [
 			INHERIT_ACTION	;next
 			INHERIT_ACTION	;pick
 			INHERIT_ACTION	;poke
-			INHERIT_ACTION	;put
+			null			;put
 			INHERIT_ACTION	;remove
 			INHERIT_ACTION	;reverse
 			INHERIT_ACTION	;select
@@ -318,7 +325,7 @@ file: context [
 			;-- I/O actions --
 			null			;create
 			null			;close
-			null			;delete
+			:delete
 			INHERIT_ACTION	;modify
 			null			;open
 			null			;open?
